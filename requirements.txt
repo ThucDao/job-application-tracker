@@ -8,6 +8,6 @@ plotly
 folium
 streamlit-folium
 streamlit-authenticator
+st-gsheets-connection
 pyotp
-streamlit-gsheets
 requests
