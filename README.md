@@ -1,35 +1,49 @@
 # 📋 Job Application Tracker
 
-A powerful Streamlit web app for tracking job applications with **Google Sheets integration**, **role-based access control**, and **interactive analytics**.
+A powerful Streamlit web app for tracking job applications with **Google Sheets integration**, **role-based access control**, **geospatial features**, and **interactive analytics**.
 
 ## ✨ Features
 
 ### 🔐 3-Tier Authentication System
-- **Admin (You)**: Full access - view & edit; see real company names and job titles
-- **Trusted Viewers (Family)**: Read-only access; see real data but cannot edit
-- **Public (Recruiters)**: No login; see masked/dummy data for privacy
+- **Admin (You)**: Full access - see real company names and job titles; view all data
+- **Trusted Viewers (Family)**: Read-only access; see real data but cannot modify
+- **Public (Recruiters)**: No login; see masked/dummy data for privacy protection
+
+### 🔒 Data Security & Masking
+- **Source-level redaction**: Sensitive data is masked at the data pipeline level before reaching any UI components
+- **Column visibility control**: Salary Range and Notes columns are hidden from public users
+- Company names masked as "Top Fintech Company", "Leading Tech Corp", etc.
+- Job titles masked as "Confidential Senior Role", "Strategic Position", etc.
+- Addresses masked as "Confidential Location"
+- Both DataTable and Map consume the same redacted data for consistency
 
 ### 📊 Dashboard & Analytics
-- Summary metrics: Total applied, waiting, rejections, interviews, offers
+- Summary metrics: Applied, Rejected, Interviews, Offers
+- Responsive metric display: 1-line on desktop, 2-lines on mobile
 - Interactive charts: Location distribution, applications over time, status breakdown
 - Real-time data sync with Google Sheets
 
-### 🗺️ Interactive Map
+### 🗺️ Interactive Map with Geospatial Features
 - Company locations displayed on Folium map
-- Color-coded markers by application status
+- Color-coded markers by application status (Blue/Red/Orange/Green)
 - Click markers for company details
 - Auto-centered on all locations
+- **Distance Calculator**: Enter postal code to calculate road distance to each job
+- Location Statistics: Shows count of jobs with/without coordinates
 
 ### 📋 Application Management
+- Responsive horizontal navigation bar with login
 - Search by company name or job title
 - Filter by status and job location
 - Support for 500+ applications (optimized with st.dataframe)
-- Admin-only status updates sync directly to Google Sheet
+- 1-based table indexing for better readability
 - Export filtered data to CSV with one click
+- Privacy disclaimer for public users
 
 ### 📱 Responsive Design
 - Two-column layout on desktop (table + map)
 - Mobile-friendly stacking
+- Horizontal top navigation (no sidebar clutter)
 - Clean, minimal UI using Streamlit defaults
 
 ## 🚀 Quick Start

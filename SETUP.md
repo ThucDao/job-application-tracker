@@ -96,12 +96,12 @@ The app will open at `http://localhost:8501`
 
 ### Tier 1: Admin (You)
 - **Login with**: Your email address (from `admin_email` in secrets.toml)
-- **Access**: View + Edit all real data
+- **Access**: View all real data
 - **Features**:
   - See actual company names and job titles
-  - Update application statuses directly in the app
-  - Status updates sync to Google Sheet in real-time
-  - Full analytics and data export
+  - View all analytics and detailed data
+  - Full data export capabilities
+  - Access all sensitive information
 
 **Admin Status Badge** 👑 (red)
 
@@ -110,10 +110,9 @@ The app will open at `http://localhost:8501`
 - **Access**: View only (read-only)
 - **Features**:
   - See actual company names and job titles
-  - View all analytics and data
-  - Cannot update statuses
-  - Cannot modify anything
-  - Export data to CSV
+  - View all analytics and filtered data
+  - Cannot modify or update anything
+  - Cannot access admin-only features
 
 **Viewer Status Badge** 👁️ (teal)
 
@@ -124,9 +123,71 @@ The app will open at `http://localhost:8501`
   - Job titles replaced with confidential titles
   - Addresses marked as "Confidential Location"
   - Other sensitive info hidden
+  - Salary Range and Notes columns hidden entirely
 - **Cannot**: Edit, export, or access any real data
 
 **Public Status Badge** 🌐 (gray)
+
+## 🔒 Data Security Implementation
+
+**Source-Level Redaction**: All sensitive data is masked at the data pipeline level before being passed to any UI components. This ensures:
+- The DataTable and Map components consume the same redacted data object
+- Public viewers never have access to real company information in the DOM or state
+- Sensitive columns (Salary Range, Notes) are removed entirely for public users
+- Consistent data masking across all UI elements
+
+## 🗺️ Geospatial Features
+
+### Interactive Map with Distance Calculator
+- Display company locations on an interactive Folium map
+- Color-coded pins by application status
+- **New**: Enter a postal code to calculate distance to each job location
+- Distance displayed in popup when clicking a map pin
+- Location statistics showing:
+  - Number of jobs without location data
+  - Number of jobs with valid coordinates on map
+
+### How to Use the Distance Calculator
+1. Locate the "Enter Postal Code" input above the map
+2. Type your postal code (e.g., "94102" or "SW1A0AA")
+3. The app geocodes your postal code and calculates distance to each job
+4. Click any map pin to see the calculated distance
+5. Distances are calculated as straight-line (haversine) distance in kilometers
+
+---
+
+## 🎨 UI/UX Improvements
+
+### Horizontal Navigation Bar
+- **Replaced**: Sidebar-based login with responsive horizontal top navigation
+- **Login integration**: Email sign-in form in the top navigation (no sidebar cluttering)
+- **User role badge**: Displays current role (Admin/Viewer/Public) aligned to the far right
+- **Logout button**: Quick logout with icon button next to role badge
+- **Responsive**: Adapts to desktop and mobile screens
+
+### Section Headers & Layout
+- **Application Details**: Single unified header for table + map section
+- **Removed**: Redundant sub-headers and instructional clutter
+- **Privacy Notice**: Moved above the table for public users with clear sign-in instructions
+
+### Metrics Display
+- **Responsive layout**: Desktop shows 4 metrics in one line (Applied — Rejected — Interviews — Offers)
+- **Dynamic calculation**: "Applied" count is calculated by filtering rows where Status = "Applied"
+- **Font sizing**: Metric labels are proportional to values (50%+ of number size) for better readability
+- **Removed**: Redundant "Total Applied" and "Waiting" metrics
+
+### Table Improvements
+- **Removed**: "No." column for cleaner display
+- **1-based indexing**: Row numbers start at 1 instead of 0 for user-friendly navigation
+- **Column visibility**: Salary Range and Notes columns automatically hidden for public users
+- **Optimized height**: Scroll-friendly display supports 500+ rows without performance issues
+- **Privacy disclaimer**: Displayed above table for public users with sign-in call-to-action
+
+### Map Enhancements
+- **Location Statistics Header**: Shows "[X] jobs without locations" and "[Y] job locations in map"
+- **Distance Calculator**: Postal code input with real-time geocoding via Nominatim
+- **Interactive tooltips**: Map popups display calculated distances on click
+- **Postal code support**: Works with formats like US zip codes (94102), UK postcodes (SW1A0AA), etc.
 
 ---
 
@@ -143,9 +204,9 @@ The app will open at `http://localhost:8501`
 | **Job Description** | Text | Optional | Job details |
 | **Job Location** | Text | Optional | Remote / Hybrid / Onsite |
 | **Job ID** | Text | Optional | Internal job ID |
-| **Salary Range** | Text | Optional | e.g., "$100K - $150K" |
+| **Salary Range** | Text | Optional | e.g., "$100K - $150K" (hidden for public users) |
 | **Recruiter Info** | Text | Optional | Recruiter name/email |
-| **Notes** | Text | Optional | Personal notes |
+| **Notes** | Text | Optional | Personal notes (hidden for public users) |
 | **Coordinates** | Text | Optional | "Latitude,Longitude" (e.g., "40.7128,-74.0060") |
 
 ### Getting Coordinates
@@ -160,20 +221,23 @@ To populate the **Coordinates** column for map display:
 ## ✨ App Features
 
 ### 📋 Application Management
-- Display up to 500+ applications smoothly with `st.dataframe()`
+- Display up to 500+ applications smoothly with st.dataframe()
 - Search by company name
 - Filter by job title
 - Filter by status (Applied, Rejected, Interviews, Offers)
 - Filter by job location (Remote, Hybrid, Onsite)
+- 1-based row indexing for intuitive navigation
 - Responsive layout: Side-by-side on desktop, stacked on mobile
 
-### 🗺️ Interactive Map (Right Column)
-- Displays company locations as markers
+### 🗺️ Interactive Map
+- Displays company locations as color-coded markers
 - Color-coded by status:
   - 🔵 Blue = Applied
   - 🔴 Red = Rejected
   - 🟠 Orange = Interviews
   - 🟢 Green = Offers
+- **Distance Calculator**: Enter postal code to see distances to each job location
+- Location statistics: Shows count of jobs with/without coordinates
 - Click markers for company details
 - Auto-centered on all locations
 
@@ -187,16 +251,11 @@ To populate the **Coordinates** column for map display:
 - Download filtered data as CSV
 - Filename includes current date
 - One click from sidebar
-
-### ✏️ Status Updates (Admin Only)
-- Admin can select an application
-- Choose new status from dropdown
-- Click "Update Status" button
-- Changes sync to Google Sheet instantly
-- Other users see updates on next refresh
+- Public users cannot export data
 
 ### 📱 Responsive Design
 - Optimized for desktop and mobile
+- Horizontal top navigation (no sidebar clutter)
 - Two-column layout on wide screens
 - Single column on mobile (natural stacking)
 - Clean, minimal UI with Streamlit defaults
@@ -300,20 +359,23 @@ Here's a sample row to get started:
 - **Frontend**: Streamlit (Python web framework)
 - **Database**: Google Sheets (via gspread API)
 - **Authentication**: Email-based (simple, no OAuth)
-- **Maps**: Folium + Streamlit-Folium
+- **Maps**: Folium + Streamlit-Folium with distance calculation
 - **Charts**: Plotly Express
+- **Geocoding**: Nominatim (OpenStreetMap) for postal code geocoding
 - **Spreadsheet API**: gspread with Google OAuth2
 
 ---
 
 ## 💡 Tips & Best Practices
 
-1. **Regular Backups**: Google Sheets auto-saves, but download CSVs regularly
-2. **Date Format**: Use YYYY-MM-DD for consistent date parsing
-3. **Coordinates**: Get them from Google Maps (right-click → copy coordinates)
-4. **Status Names**: Keep them exactly as: "Applied", "Rejected", "Interviews", "Offers"
-5. **Performance**: App caches data for 5 minutes; refresh manually if needed
-6. **Mobile**: Encourage trusted viewers to use mobile - it works great!
+1. **Distance Calculator**: Postal codes are geocoded in real-time; be patient on first lookup
+2. **Regular Backups**: Google Sheets auto-saves, but download CSVs regularly
+3. **Date Format**: Use YYYY-MM-DD for consistent date parsing
+4. **Coordinates**: Get them from Google Maps (right-click → copy coordinates)
+5. **Status Names**: Keep them exactly as: "Applied", "Rejected", "Interviews", "Offers"
+6. **Performance**: App caches data for 5 minutes; refresh manually if needed
+7. **Mobile**: Two-column layout naturally stacks on mobile
+8. **Data Privacy**: All sensitive data is masked at the source level for security
 
 ---
 
