@@ -8,42 +8,45 @@ A powerful Streamlit web app for tracking job applications with **Google Sheets 
 - **Admin (You)**: Full access - see real company names and job titles; view all data
 - **Trusted Viewers (Family)**: Read-only access; see real data but cannot modify
 - **Public (Recruiters)**: No login; see masked/dummy data for privacy protection
+- **Login requires both email and password**; credentials are stored securely in Streamlit secrets, not in source code
 
 ### 🔒 Data Security & Masking
 - **Source-level redaction**: Sensitive data is masked at the data pipeline level before reaching any UI components
-- **Column visibility control**: Salary Range and Notes columns are hidden from public users
+- **Column visibility control**: Salary Range, Notes, and Recruiter Info are hidden from the public-facing table
 - Company names masked as "Top Fintech Company", "Leading Tech Corp", etc.
 - Job titles masked as "Confidential Senior Role", "Strategic Position", etc.
-- Addresses masked as "Confidential Location"
+- Addresses masked as "Confidential Location" for public viewers
 - Both DataTable and Map consume the same redacted data for consistency
 
 ### 📊 Dashboard & Analytics
 - Summary metrics: Applied, Rejected, Interviews, Offers
 - Responsive metric display: 1-line on desktop, 2-lines on mobile
-- Interactive charts: Location distribution, applications over time, status breakdown
-- Real-time data sync with Google Sheets
+- Locked charts to prevent accidental zoom/pan
+- Applications by Job Location shown as a pie chart
+- Applications Over Time with y-axis starting at zero
+- Applications by Regions shown as a bar chart
 
 ### 🗺️ Interactive Map with Geospatial Features
-- Company locations displayed on Folium map
+- Company locations displayed on a square Folium map
 - Color-coded markers by application status (Blue/Red/Orange/Green)
 - Click markers for company details
-- Auto-centered on all locations
-- **Distance Calculator**: Enter postal code to calculate road distance to each job
+- Auto-centered on selected application row or postal code input
+- **Distance Calculator**: Enter postal code to calculate straight-line distance to each job
 - Location Statistics: Shows count of jobs with/without coordinates
 
 ### 📋 Application Management
-- Responsive horizontal navigation bar with login
-- Search by company name or job title
-- Filter by status and job location
-- Support for 500+ applications (optimized with st.dataframe)
-- 1-based table indexing for better readability
-- Export filtered data to CSV with one click
-- Privacy disclaimer for public users
+- Horizontal top menu with Log in, Search, Filter, Export
+- Login opens an email/password dialog
+- Search fields for company and job title
+- Filter dropdowns for status and location
+- Export dropdown offers Export to CSV and Export to PDF
+- Table uses 1-based "No." indexing and includes Company Address before Job Location
+- Notes and Recruiter Info are hidden from the table for all users
 
 ### 📱 Responsive Design
 - Two-column layout on desktop (table + map)
 - Mobile-friendly stacking
-- Horizontal top navigation (no sidebar clutter)
+- Horizontal top navigation (no sidebar)
 - Clean, minimal UI using Streamlit defaults
 
 ## 🚀 Quick Start
@@ -102,8 +105,12 @@ Visit `http://localhost:8501` in your browser.
 Create `.streamlit/secrets.toml`:
 ```toml
 sheet_url = "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
-admin_email = "your.email@gmail.com"
+admin_emails = ["your.email@gmail.com"]
 trusted_viewers = ["spouse@gmail.com", "brother@gmail.com"]
+
+[user_passwords]
+your.email@gmail.com = "your_admin_password"
+spouse@gmail.com = "trusted_viewer_password"
 
 [gcp_service_account]
 # Paste your Google Cloud service account JSON here
@@ -111,6 +118,8 @@ type = "service_account"
 project_id = "..."
 ...
 ```
+
+> Do not store passwords in source code. Keep them in Streamlit secrets or environment secrets only.
 
 ## 🚀 Deployment
 

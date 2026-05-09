@@ -11,3 +11,4 @@ streamlit-authenticator
 st-gsheets-connection
 pyotp
 requests
+fpdf2

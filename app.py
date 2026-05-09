@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -6,6 +7,7 @@ import folium
 from streamlit_folium import st_folium
 import plotly.express as px
 import plotly.graph_objects as go
+from fpdf import FPDF
 from datetime import datetime
 import json
 import requests
@@ -24,7 +26,7 @@ st.markdown("""
     <style>
     .top-navbar {
         display: flex;
-        justify-content: space-between;
+        justify-content: center;
         align-items: center;
         padding: 15px 20px;
         background-color: #f0f2f6;
@@ -33,37 +35,43 @@ st.markdown("""
         border-radius: 5px;
     }
     .title-section {
-        display: flex;
-        align-items: center;
-        gap: 15px;
+        font-size: 30px;
+        font-weight: 800;
+        text-align: center;
+        width: 100%;
     }
-    .admin-badge {
-        background-color: #ff6b6b;
-        color: white;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
+    .nav-button {
+        width: 100%;
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #7f8c8d;
+        background-color: #ffffff;
+        color: #2c3e50;
+        font-weight: 600;
+        cursor: pointer;
     }
-    .viewer-badge {
-        background-color: #4ecdc4;
-        color: white;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
-    }
-    .public-badge {
-        background-color: #95a5a6;
-        color: white;
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: bold;
+    .metric-number {
+        font-size: 2.8rem;
+        font-weight: 800;
+        margin-bottom: 0;
     }
     .metric-label {
-        font-size: 14px !important;
-        font-weight: 600;
+        font-size: 1.4rem !important;
+        font-weight: 700 !important;
+        margin-top: 5px;
+    }
+    .metrics-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+    }
+    .location-stats {
+        background-color: #e8f4f8;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        font-weight: 500;
     }
     .privacy-notice {
         background-color: #fff3cd;
@@ -73,14 +81,11 @@ st.markdown("""
         margin-bottom: 15px;
         color: #333;
     }
-    .location-stats {
-        background-color: #e8f4f8;
-        padding: 10px;
-        border-radius: 5px;
-        margin-bottom: 10px;
-        font-weight: 500;
+    @media(max-width: 768px) {
+        .metrics-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
     }
-    </style>
     """, unsafe_allow_html=True)
 
 # ============================================================================
@@ -96,70 +101,144 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "postal_code" not in st.session_state:
     st.session_state.postal_code = ""
+if "postal_code_coords" not in st.session_state:
+    st.session_state.postal_code_coords = None
 if "distances" not in st.session_state:
     st.session_state.distances = {}
+if "active_nav" not in st.session_state:
+    st.session_state.active_nav = None
+if "search_company" not in st.session_state:
+    st.session_state.search_company = ""
+if "search_title" not in st.session_state:
+    st.session_state.search_title = ""
+if "filter_status" not in st.session_state:
+    st.session_state.filter_status = "All"
+if "filter_location" not in st.session_state:
+    st.session_state.filter_location = "All"
+if "export_option" not in st.session_state:
+    st.session_state.export_option = "Export to CSV"
+if "selected_row_no" not in st.session_state:
+    st.session_state.selected_row_no = 1
 
 # Role configuration
-ADMIN_EMAIL = st.secrets.get("admin_email", "admin@example.com")
+ADMIN_EMAILS = st.secrets.get("admin_emails", [])
+if isinstance(ADMIN_EMAILS, str):
+    ADMIN_EMAILS = [ADMIN_EMAILS]
+if not ADMIN_EMAILS and st.secrets.get("admin_email"):
+    ADMIN_EMAILS = [st.secrets.get("admin_email")]
+
 TRUSTED_VIEWERS = st.secrets.get("trusted_viewers", [])
 if isinstance(TRUSTED_VIEWERS, str):
     TRUSTED_VIEWERS = [TRUSTED_VIEWERS]
 
-def authenticate_user(email):
-    """Authenticate user by email"""
-    if email == ADMIN_EMAIL:
+USER_PASSWORDS = st.secrets.get("user_passwords", {})
+
+def authenticate_user(email, password):
+    """Authenticate user by email and password."""
+    if not email or not password:
+        return False
+
+    if USER_PASSWORDS and email in USER_PASSWORDS:
+        expected_password = USER_PASSWORDS[email]
+        if password != expected_password:
+            return False
+    else:
+        return False
+
+    if email in ADMIN_EMAILS:
         st.session_state.user_tier = "admin"
-        st.session_state.user_email = email
-        st.session_state.authenticated = True
-        return True
     elif email in TRUSTED_VIEWERS:
         st.session_state.user_tier = "trusted_viewer"
-        st.session_state.user_email = email
-        st.session_state.authenticated = True
-        return True
-    return False
+    else:
+        st.session_state.user_tier = "public"
+
+    st.session_state.user_email = email
+    st.session_state.authenticated = True
+    return True
+
 
 def logout():
     """Logout function"""
     st.session_state.user_tier = None
     st.session_state.user_email = None
     st.session_state.authenticated = False
+    st.session_state.active_nav = None
+    st.session_state.search_company = ""
+    st.session_state.search_title = ""
+    st.session_state.filter_status = "All"
+    st.session_state.filter_location = "All"
+    st.session_state.export_option = "Export to CSV"
+    st.session_state.selected_row_no = 1
+    st.session_state.postal_code = ""
+    st.session_state.postal_code_coords = None
     st.rerun()
 
 # TOP NAVIGATION BAR
-col_nav1, col_nav2, col_nav3 = st.columns([2, 3, 1])
+st.markdown(
+    '<div class="top-navbar"><div class="title-section">Job Application Tracker</div></div>',
+    unsafe_allow_html=True
+)
 
-with col_nav1:
-    st.markdown("### 📋 Job Application Tracker")
-
-with col_nav2:
+menu_cols = st.columns([1, 1, 1, 1])
+with menu_cols[0]:
     if not st.session_state.authenticated:
-        with st.form("login_form_inline"):
-            email = st.text_input("Sign in with email:", key="login_email", placeholder="your.email@gmail.com")
-            submit_col = st.columns([1, 4])
-            with submit_col[0]:
-                submit = st.form_submit_button("Sign In", use_container_width=True)
-            
-            if submit and email:
-                if authenticate_user(email):
-                    st.success(f"✅ Logged in!")
-                    st.rerun()
-                else:
-                    st.error("❌ Email not recognized. Viewing as Public User.")
-
-with col_nav3:
-    if st.session_state.authenticated:
-        badge_col, logout_col = st.columns([2, 1])
-        with badge_col:
-            if st.session_state.user_tier == "admin":
-                st.markdown('<span class="admin-badge">👑 ADMIN</span>', unsafe_allow_html=True)
-            else:
-                st.markdown('<span class="viewer-badge">👁️ VIEWER</span>', unsafe_allow_html=True)
-        with logout_col:
-            if st.button("🚪", help="Logout"):
-                logout()
+        if st.button("Log in", key="nav_login"):
+            st.session_state.active_nav = "login"
     else:
-        st.markdown('<span class="public-badge">🌐 PUBLIC</span>', unsafe_allow_html=True)
+        user_label = "Admin" if st.session_state.user_tier == "admin" else "Viewer"
+        st.markdown(f"**Logged in as {user_label}**")
+with menu_cols[1]:
+    if st.button("Search", key="nav_search"):
+        st.session_state.active_nav = "search"
+with menu_cols[2]:
+    if st.button("Filter", key="nav_filter"):
+        st.session_state.active_nav = "filter"
+with menu_cols[3]:
+    if st.button("Export", key="nav_export"):
+        st.session_state.active_nav = "export"
+
+if st.session_state.authenticated:
+    logout_col1, logout_col2 = st.columns([9, 1])
+    with logout_col2:
+        if st.button("Logout", key="nav_logout"):
+            logout()
+
+if st.session_state.active_nav == "login":
+    with st.form("login_form"):
+        email = st.text_input("Email address:", key="login_email", placeholder="your.email@example.com")
+        password = st.text_input("Password:", key="login_password", type="password")
+        submit_login = st.form_submit_button("Log in")
+        if submit_login:
+            if authenticate_user(email, password):
+                st.success("Logged in successfully.")
+                st.session_state.active_nav = None
+                st.experimental_rerun()
+            else:
+                st.error("Invalid email or password. Please try again.")
+
+elif st.session_state.active_nav == "search":
+    st.text_input("Search by company:", key="search_company", placeholder="Company name")
+    st.text_input("Search by job title:", key="search_title", placeholder="Job title")
+
+elif st.session_state.active_nav == "filter":
+    st.selectbox(
+        "Filter by status:",
+        ["All", "Applied", "Rejected", "Interviews", "Offers"],
+        key="filter_status"
+    )
+    st.selectbox(
+        "Filter by location:",
+        ["All", "Remote", "Hybrid", "Onsite"],
+        key="filter_location"
+    )
+
+elif st.session_state.active_nav == "export":
+    st.selectbox(
+        "Export options:",
+        ["Export to CSV", "Export to PDF"],
+        key="export_option"
+    )
+    st.info("Select an export option, then use the export action once data has loaded below.")
 
 st.markdown("---")
 
@@ -269,6 +348,45 @@ def mask_sensitive_columns(df, tier):
     
     return df_masked
 
+
+def get_edmonton_region(address):
+    """Returns the region name by examining the company address."""
+    if not address:
+        return "Unknown"
+
+    addr_clean = address.lower()
+
+    if any(k in addr_clean for k in ["remote", "work from home", "wfh"]):
+        return "Remote"
+
+    if "st. albert" in addr_clean or re.search(r't8[nat]', addr_clean):
+        return "St. Albert"
+    if "sherwood park" in addr_clean or re.search(r't8[abgh]', addr_clean):
+        return "Sherwood Park"
+    if "leduc" in addr_clean or "nisku" in addr_clean or re.search(r't9e', addr_clean):
+        return "Leduc"
+
+    if re.search(r't5j|t5k|t5h', addr_clean):
+        return "Downtown"
+    if re.search(r't5p|t5s|t5t|t5m', addr_clean):
+        return "West"
+    if re.search(r't5v|t5x|t6v', addr_clean):
+        return "Northwest"
+    if re.search(r't5y|t5z|t5w', addr_clean):
+        return "Northeast"
+    if re.search(r't6b|t6c|t6e|t6k|t6l|t6p|t6t', addr_clean):
+        return "Southeast"
+    if re.search(r't6h|t6j|t6m|t6r|t6w|t6g', addr_clean):
+        return "South"
+
+    if "downtown" in addr_clean:
+        return "Downtown"
+    if "industrial" in addr_clean:
+        return "Northwest"
+
+    return "Edmonton (General)"
+
+
 def calculate_distance_to_postal_code(lat, lon, postal_code):
     """
     Calculate distance from given coordinates to postal code using OSRM.
@@ -285,20 +403,46 @@ def calculate_distance_to_postal_code(lat, lon, postal_code):
 
 def geocode_postal_code(postal_code):
     """
-    Geocode postal code to latitude and longitude using Nominatim API.
-    Returns (latitude, longitude) or None.
+    Geocode a postal code using Nominatim and return (latitude, longitude).
     """
     try:
-        url = f"https://nominatim.openstreetmap.org/search?postalcode={postal_code}&format=json"
+        query = postal_code.strip()
+        if not query:
+            return None
+
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": query,
+            "format": "json",
+            "countrycodes": "ca",
+            "limit": 1
+        }
         headers = {"User-Agent": "JobTrackerApp"}
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        if response.status_code == 200 and len(response.json()) > 0:
-            result = response.json()[0]
-            return (float(result.get("lat")), float(result.get("lon")))
+        response = requests.get(url, params=params, headers=headers, timeout=7)
+
+        if response.status_code == 200:
+            results = response.json()
+            if results:
+                result = results[0]
+                return (float(result.get("lat")), float(result.get("lon")))
     except:
         pass
     return None
+
+
+def get_postal_code_coordinates(postal_code):
+    postal_code = (postal_code or "").strip()
+    if not postal_code:
+        return None
+
+    if st.session_state.postal_code == postal_code and st.session_state.postal_code_coords is not None:
+        return st.session_state.postal_code_coords
+
+    coords = geocode_postal_code(postal_code)
+    st.session_state.postal_code = postal_code
+    st.session_state.postal_code_coords = coords
+    return coords
+
 
 def calculate_haversine_distance(lat1, lon1, lat2, lon2):
     """
@@ -342,6 +486,31 @@ def export_to_csv(df):
     csv = df.to_csv(index=False)
     return csv
 
+
+def export_to_pdf(df):
+    """Export dataframe to a simple PDF document."""
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_font("Arial", "B", 14)
+        pdf.cell(0, 10, "Job Applications", ln=True)
+        pdf.ln(4)
+        pdf.set_font("Arial", size=10)
+
+        display_df = df.copy()
+        display_df = display_df.drop(columns=[col for col in ["Notes", "Recruiter Info"] if col in display_df.columns], errors='ignore')
+
+        for idx, row in display_df.iterrows():
+            line = " | ".join([f"{col}: {row[col]}" for col in display_df.columns if pd.notna(row[col])])
+            pdf.multi_cell(0, 6, line)
+            pdf.ln(1)
+
+        return pdf.output(dest="S").encode("latin-1")
+    except Exception:
+        return None
+
+
 def parse_coordinates(coord_str):
     """Parse 'lat,lng' string to tuple"""
     try:
@@ -353,8 +522,8 @@ def parse_coordinates(coord_str):
         pass
     return None
 
-def generate_map(df, postal_code_coords=None):
-    """Generate Folium map with company locations and optional distance display"""
+def generate_map(df, postal_code_coords=None, center_coords=None):
+    """Generate Folium map with company locations and optional distance display."""
     # Filter out rows without coordinates
     df_with_coords = df[df["Coordinates"].notna() & (df["Coordinates"] != "")]
     
@@ -362,7 +531,6 @@ def generate_map(df, postal_code_coords=None):
         st.info("📍 No location data available for map.")
         return None
     
-    # Calculate center (average of all coordinates)
     coords_list = [parse_coordinates(c) for c in df_with_coords["Coordinates"]]
     coords_list = [c for c in coords_list if c is not None]
     
@@ -370,20 +538,34 @@ def generate_map(df, postal_code_coords=None):
         st.info("📍 No valid coordinates found.")
         return None
     
-    center_lat = sum([c[0] for c in coords_list]) / len(coords_list)
-    center_lng = sum([c[1] for c in coords_list]) / len(coords_list)
+    if center_coords:
+        center_lat, center_lng = center_coords
+        zoom_start = 13
+    else:
+        center_lat = sum([c[0] for c in coords_list]) / len(coords_list)
+        center_lng = sum([c[1] for c in coords_list]) / len(coords_list)
+        zoom_start = 12
     
     m = folium.Map(
         location=[center_lat, center_lng],
-        zoom_start=12,
+        zoom_start=zoom_start,
         tiles="OpenStreetMap"
     )
     
-    # Add markers
+    if center_coords:
+        folium.CircleMarker(
+            location=center_coords,
+            radius=10,
+            color="black",
+            fill=True,
+            fill_color="yellow",
+            fill_opacity=0.8,
+            popup="Selected company"
+        ).add_to(m)
+    
     for idx, row in df_with_coords.iterrows():
         coords = parse_coordinates(row["Coordinates"])
         if coords:
-            # Calculate distance if postal code provided
             distance_text = ""
             if postal_code_coords:
                 distance_km = calculate_haversine_distance(
@@ -394,12 +576,12 @@ def generate_map(df, postal_code_coords=None):
             
             popup_text = f"""
             <b>{row.get('Company Name', 'N/A')}</b><br>
-            {row.get('Job Title', 'N/A')}<br>
+            <i>{row.get('Job Title', 'N/A')}</i><br>
             Status: {row.get('Status', 'N/A')}<br>
-            Location: {row.get('Job Location', 'N/A')}{distance_text}
+            Location: {row.get('Job Location', 'N/A')}<br>
+            Address: {row.get('Company Address', 'N/A')}{distance_text}
             """
             
-            # Color code by status
             status_colors = {
                 "Applied": "blue",
                 "Rejected": "red",
@@ -410,7 +592,7 @@ def generate_map(df, postal_code_coords=None):
             
             folium.Marker(
                 location=coords,
-                popup=folium.Popup(popup_text, max_width=250),
+                popup=folium.Popup(popup_text, max_width=280),
                 icon=folium.Icon(color=color, icon="briefcase")
             ).add_to(m)
     
@@ -433,23 +615,23 @@ def get_summary_metrics(df):
     }
 
 def plot_location_distribution(df):
-    """Plot job location distribution"""
+    """Plot the job location distribution as a pie chart."""
     if len(df) == 0 or "Job Location" not in df.columns:
         return None
     
     location_counts = df["Job Location"].value_counts()
-    fig = px.bar(
-        x=location_counts.index,
-        y=location_counts.values,
-        labels={"x": "Job Location", "y": "Count"},
-        title="Job Applications by Location Type",
-        color=location_counts.values,
-        color_continuous_scale="Viridis"
+    fig = px.pie(
+        values=location_counts.values,
+        names=location_counts.index,
+        title="Applications by Job Location",
+        color_discrete_sequence=px.colors.qualitative.Plotly
     )
+    fig.update_traces(textposition='inside', textinfo='percent+label')
+    fig.update_layout(showlegend=True)
     return fig
 
 def plot_applications_per_day(df):
-    """Plot applications over time"""
+    """Plot applications over time."""
     if len(df) == 0 or "Applied Date" not in df.columns:
         return None
     
@@ -469,21 +651,28 @@ def plot_applications_per_day(df):
             title="Applications Over Time",
             markers=True
         )
+        fig.update_yaxes(range=[0, max(0, daily_counts.max() + 1)])
+        fig.update_layout(hovermode='closest')
         return fig
     except:
         return None
 
-def plot_status_distribution(df):
-    """Plot status distribution"""
-    if len(df) == 0 or "Status" not in df.columns:
+def plot_region_distribution(df):
+    """Plot applications by Edmonton region."""
+    if len(df) == 0 or "Company Address" not in df.columns:
         return None
     
-    status_counts = df["Status"].value_counts()
-    fig = px.pie(
-        values=status_counts.values,
-        names=status_counts.index,
-        title="Application Status Distribution"
+    region_series = df["Company Address"].fillna("").apply(get_edmonton_region)
+    region_counts = region_series.value_counts()
+    fig = px.bar(
+        x=region_counts.index,
+        y=region_counts.values,
+        labels={"x": "Region", "y": "Applications"},
+        title="Applications by Regions",
+        color=region_counts.index,
+        color_discrete_sequence=px.colors.qualitative.Safe
     )
+    fig.update_layout(showlegend=False)
     return fig
 
 # ============================================================================
@@ -506,51 +695,53 @@ def main():
     
     # APPLY SOURCE-LEVEL MASKING BASED ON USER TIER
     df_to_use = mask_sensitive_columns(df, st.session_state.user_tier)
-    
-    # SIDEBAR FILTERS (collapsible)
-    with st.sidebar:
-        st.markdown("### 🔍 Search & Filter")
-        search_company = st.text_input("🏢 Search Company:", "")
-        search_title = st.text_input("💼 Search Job Title:", "")
-        filter_status = st.selectbox(
-            "📊 Filter by Status:",
-            ["All", "Applied", "Rejected", "Interviews", "Offers"]
-        )
-        filter_location = st.selectbox(
-            "📍 Filter by Location:",
-            ["All", "Remote", "Hybrid", "Onsite"]
-        )
-        
-        st.markdown("---")
-        
-        # Export button
-        csv_data = export_to_csv(df_to_use)
-        st.download_button(
-            label="📥 Export to CSV",
-            data=csv_data,
-            file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    
+
+    # Apply filters and search values from the top menu
+    search_company = st.session_state.search_company
+    search_title = st.session_state.search_title
+    filter_status = st.session_state.filter_status
+    filter_location = st.session_state.filter_location
+
+    if st.session_state.active_nav == "export":
+        if st.session_state.export_option == "Export to CSV":
+            csv_data = export_to_csv(df_to_use)
+            st.download_button(
+                label="Download CSV",
+                data=csv_data,
+                file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+        elif st.session_state.export_option == "Export to PDF":
+            pdf_data = export_to_pdf(df_to_use)
+            if pdf_data:
+                st.download_button(
+                    label="Download PDF",
+                    data=pdf_data,
+                    file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf"
+                )
+            else:
+                st.warning("Unable to generate PDF export at this time.")
+
     # Apply filters
-    df_filtered = apply_filters(df_to_use, search_company, search_title, 
+    df_filtered = apply_filters(df_to_use, search_company, search_title,
                                filter_status, filter_location)
-    
+
     # SUMMARY METRICS - Responsive layout
-    st.markdown("### 📊 Summary Metrics")
+    st.markdown("### Summary Metrics")
     metrics = get_summary_metrics(df_filtered)
     
-    # Check screen size and adjust layout
-    metric_cols = st.columns(4)
-    with metric_cols[0]:
-        st.metric("Applied", metrics["applied"])
-    with metric_cols[1]:
-        st.metric("Rejected", metrics["rejected"])
-    with metric_cols[2]:
-        st.metric("Interviews", metrics["interviews"])
-    with metric_cols[3]:
-        st.metric("Offers", metrics["offers"])
-    
+    st.markdown(
+        f"""
+        <div class="metrics-row">
+            <div><div class="metric-number">{metrics['applied']}</div><div class="metric-label">Applied</div></div>
+            <div><div class="metric-number">{metrics['rejected']}</div><div class="metric-label">Rejected</div></div>
+            <div><div class="metric-number">{metrics['interviews']}</div><div class="metric-label">Interviews</div></div>
+            <div><div class="metric-number">{metrics['offers']}</div><div class="metric-label">Offers</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     st.markdown("---")
     
     # APPLICATION DETAILS SECTION
@@ -560,36 +751,44 @@ def main():
     col1, col2 = st.columns([1.5, 1])
     
     with col1:
-        # Privacy notice for non-admin users
+        # Privacy notice for public users
         if st.session_state.user_tier == "public":
             st.markdown(
-                '<div class="privacy-notice">ℹ️ <strong>Privacy Notice:</strong> '
+                '<div class="privacy-notice"><strong>For public viewers:</strong> '
                 'Company names and job titles are masked for privacy.<br>'
                 'To access real data, please sign in as an admin or trusted viewer.</div>',
                 unsafe_allow_html=True
             )
         
-        # Display table with 1-based indexing (remove "No." column if it exists)
-        display_cols = ["Applied Date", "Company Name", "Job Title", 
-                      "Status", "Job Location"]
+        # Display table with 1-based indexing and a dedicated "No." index label
+        display_cols = ["Applied Date", "Company Name", "Job Title", "Status", "Company Address", "Job Location"]
         
-        # Add optional columns only if present
-        optional_cols = ["Salary Range", "Notes", "Job Description", "Recruiter Info"]
+        # Add optional columns only if present and allowed
+        optional_cols = ["Salary Range", "Job Description"]
         for col in optional_cols:
-            if col in df_filtered.columns:
-                # Only show Salary Range and Notes for non-public users
-                if st.session_state.user_tier != "public":
-                    display_cols.append(col)
-        
-        # Filter to available columns
+            if col in df_filtered.columns and st.session_state.user_tier != "public":
+                display_cols.append(col)
+
         display_cols = [col for col in display_cols if col in df_filtered.columns]
-        
-        # Create 1-based index
-        df_display = df_filtered[display_cols].reset_index(drop=True)
+
+        df_filtered_reset = df_filtered.reset_index(drop=True)
+        df_display = df_filtered_reset[display_cols].copy()
         df_display.index = df_display.index + 1
-        df_display.index.name = "Index"
-        
-        st.dataframe(df_display, use_container_width=True, height=500)
+        df_display.index.name = "No."
+
+        st.dataframe(df_display, use_container_width=True, height=420)
+
+        selected_center_coords = None
+        if len(df_display) > 0:
+            selected_row_no = st.selectbox(
+                "Center map on application row:",
+                df_display.index,
+                key="selected_row_no",
+                format_func=lambda x: f"{x}: {df_display.loc[x, 'Company Name']}"
+            )
+            if selected_row_no and selected_row_no <= len(df_filtered_reset):
+                selected_row = df_filtered_reset.iloc[selected_row_no - 1]
+                selected_center_coords = parse_coordinates(selected_row.get("Coordinates", ""))
     
     with col2:
         # Location stats header
@@ -614,21 +813,17 @@ def main():
         )
         
         postal_code_coords = None
-        if postal_code_input and postal_code_input != st.session_state.postal_code:
-            st.session_state.postal_code = postal_code_input
+        if postal_code_input:
             with st.spinner("🔍 Geocoding postal code..."):
-                postal_code_coords = geocode_postal_code(postal_code_input)
+                postal_code_coords = get_postal_code_coordinates(postal_code_input)
                 if postal_code_coords:
                     st.success(f"✅ Found: {postal_code_coords[0]:.4f}, {postal_code_coords[1]:.4f}")
                 else:
                     st.warning("⚠️ Postal code not found")
-        elif st.session_state.postal_code:
-            postal_code_coords = geocode_postal_code(st.session_state.postal_code)
-        
-        # Generate and display map
-        map_obj = generate_map(df_filtered, postal_code_coords)
+
+        map_obj = generate_map(df_filtered, postal_code_coords, center_coords=selected_center_coords)
         if map_obj:
-            st_folium(map_obj, width=450, height=500)
+            st_folium(map_obj, width=520, height=520)
         else:
             st.info("📍 Add coordinates (Latitude,Longitude) to locations to see the map.")
     
@@ -641,17 +836,17 @@ def main():
     with col1:
         fig = plot_location_distribution(df_filtered)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={"staticPlot": True})
     
     with col2:
         fig = plot_applications_per_day(df_filtered)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={"staticPlot": True})
     
     with col3:
-        fig = plot_status_distribution(df_filtered)
+        fig = plot_region_distribution(df_filtered)
         if fig:
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={"staticPlot": True})
 
 if __name__ == "__main__":
     main()

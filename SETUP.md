@@ -55,12 +55,16 @@ Create a file `.streamlit/secrets.toml` in your project root:
 # Google Sheets Configuration
 sheet_url = "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit#gid=0"
 
-# Admin email (gets full editing access)
-admin_email = "your.email@example.com"
+# Admin emails (full access)
+admin_emails = ["your.email@example.com"]
 
-# Trusted viewers (family members - read-only access)
-# Use a list of emails
+# Trusted viewers (read-only access)
 trusted_viewers = ["spouse@example.com", "brother@example.com"]
+
+# User passwords stored securely in secrets
+[user_passwords]
+your.email@example.com = "your_admin_password"
+spouse@example.com = "trusted_viewer_password"
 
 # Google Cloud Service Account (paste entire JSON)
 [gcp_service_account]
@@ -82,6 +86,8 @@ client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/..."
 3. In `secrets.toml`, replace `[gcp_service_account]` and paste the JSON structure
 4. Convert the `private_key` field to have proper escape characters (usually done automatically)
 
+> Do not store passwords in source code. Keep them in Streamlit secrets or environment secrets only.
+
 ### 4. Run the App
 
 ```bash
@@ -95,7 +101,7 @@ The app will open at `http://localhost:8501`
 ## 🔐 Authentication System (3 Tiers)
 
 ### Tier 1: Admin (You)
-- **Login with**: Your email address (from `admin_email` in secrets.toml)
+- **Login with**: Your email address and password stored in Streamlit secrets
 - **Access**: View all real data
 - **Features**:
   - See actual company names and job titles
@@ -103,18 +109,14 @@ The app will open at `http://localhost:8501`
   - Full data export capabilities
   - Access all sensitive information
 
-**Admin Status Badge** 👑 (red)
-
 ### Tier 2: Trusted Viewers (Family)
-- **Login with**: Emails listed in `trusted_viewers` in secrets.toml
+- **Login with**: Emails listed in `trusted_viewers` and matching password from Streamlit secrets
 - **Access**: View only (read-only)
 - **Features**:
   - See actual company names and job titles
   - View all analytics and filtered data
   - Cannot modify or update anything
   - Cannot access admin-only features
-
-**Viewer Status Badge** 👁️ (teal)
 
 ### Tier 3: Public (Recruiters/Others)
 - **Access**: No login required
@@ -159,10 +161,12 @@ The app will open at `http://localhost:8501`
 ## 🎨 UI/UX Improvements
 
 ### Horizontal Navigation Bar
-- **Replaced**: Sidebar-based login with responsive horizontal top navigation
-- **Login integration**: Email sign-in form in the top navigation (no sidebar cluttering)
-- **User role badge**: Displays current role (Admin/Viewer/Public) aligned to the far right
-- **Logout button**: Quick logout with icon button next to role badge
+- **Replaced**: Sidebar-based login with responsive horizontal top menu
+- **Menu options**: Log in, Search, Filter, Export
+- **Login dialog**: Requires both email and password
+- **Search**: Company and job title inputs displayed in the top menu area
+- **Filter**: Status and location dropdowns shown in the menu layer
+- **Export**: Drop-down options for Export to CSV and Export to PDF
 - **Responsive**: Adapts to desktop and mobile screens
 
 ### Section Headers & Layout
@@ -242,21 +246,22 @@ To populate the **Coordinates** column for map display:
 - Auto-centered on all locations
 
 ### 📈 Analytics Dashboard
-- **Bar Chart**: Job location distribution (Remote/Hybrid/Onsite)
-- **Line Chart**: Applications over time
-- **Pie Chart**: Status distribution
+- **Applications by Job Location**: Pie chart with solid colors per region
+- **Applications Over Time**: Line chart with y-axis always starting at 0
+- **Applications by Regions**: Bar chart showing distribution across Edmonton regions
+- All charts are locked to prevent accidental zoom/pan
 - All charts update based on filtered data
 
 ### 💾 Data Export
-- Download filtered data as CSV
+- Download filtered data as CSV or PDF via the "Export" button
 - Filename includes current date
-- One click from sidebar
+- CSV and PDF export options available
 - Public users cannot export data
 
 ### 📱 Responsive Design
 - Optimized for desktop and mobile
 - Horizontal top navigation (no sidebar clutter)
-- Two-column layout on wide screens
+- Two-column layout on wide screens (table + map)
 - Single column on mobile (natural stacking)
 - Clean, minimal UI with Streamlit defaults
 
@@ -268,8 +273,12 @@ If deploying to Streamlit Cloud, add to **Settings → Secrets**:
 
 ```toml
 sheet_url = "https://docs.google.com/spreadsheets/d/..."
-admin_email = "your.email@example.com"
+admin_emails = ["your.email@example.com"]
 trusted_viewers = ["spouse@example.com", "brother@example.com"]
+
+[user_passwords]
+your.email@example.com = "your_admin_password"
+spouse@example.com = "trusted_viewer_password"
 
 [gcp_service_account]
 type = "service_account"
@@ -283,6 +292,8 @@ token_uri = "..."
 auth_provider_x509_cert_url = "..."
 client_x509_cert_url = "..."
 ```
+
+> Do not store passwords in source code. Keep them in Streamlit Secrets (for Streamlit Cloud) or environment variables (for local/self-hosted deployments).
 
 ---
 
