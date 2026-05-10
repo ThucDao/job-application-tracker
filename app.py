@@ -7,7 +7,6 @@ import folium
 from streamlit_folium import st_folium
 import plotly.express as px
 import plotly.graph_objects as go
-from fpdf import FPDF
 from datetime import datetime
 import json
 import requests
@@ -22,6 +21,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# Custom CSS to hide the 'Fork' button and GitHub icon
+hide_fork_style = """
+    <style>
+    #MainMenu {visibility: hidden;} /* Hides the top-right hamburger menu */
+    .stAppDeployButton {display:none;} /* Hides the 'Deploy/Fork' button area */
+    header {visibility: hidden;} /* Hides the entire top header bar */
+    </style>
+"""
+st.markdown(hide_fork_style, unsafe_allow_html=True)
 
 # Custom CSS for better UI with horizontal nav
 st.markdown("""
