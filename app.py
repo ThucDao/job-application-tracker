@@ -18,8 +18,8 @@ SHEET_URL = st.secrets.get("sheet_url")
 
 st.set_page_config(
     page_title="Job Application Tracker",
-    layout="wide",
-    initial_sidebar_state="collapsed",
+    page_icon="🗂️",
+    layout="wide"
 )
 
 # Custom CSS to hide the 'Fork' button and GitHub icon
