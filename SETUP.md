@@ -151,7 +151,7 @@ The app will open at `http://localhost:8501`
 
 ### How to Use the Distance Calculator
 1. Locate the "Enter Postal Code" input above the map
-2. Type your postal code (e.g., "94102" or "SW1A0AA")
+2. Type your postal code (e.g., "A1B 2C3")
 3. The app geocodes your postal code and calculates distance to each job
 4. Click any map pin to see the calculated distance
 5. Distances are calculated as straight-line (haversine) distance in kilometers
@@ -163,10 +163,11 @@ The app will open at `http://localhost:8501`
 ### Horizontal Navigation Bar
 - **Replaced**: Sidebar-based login with responsive horizontal top menu
 - **Menu options**: Log in, Search, Filter, Export
+- **Admin-only Import**: Visible when signed in as admin and opens the Google Sheets source file
 - **Login dialog**: Requires both email and password
 - **Search**: Company and job title inputs displayed in the top menu area
 - **Filter**: Status and location dropdowns shown in the menu layer
-- **Export**: Drop-down options for Export to CSV and Export to PDF
+- **Export**: Download CSV only
 - **Responsive**: Adapts to desktop and mobile screens
 
 ### Section Headers & Layout
@@ -191,7 +192,7 @@ The app will open at `http://localhost:8501`
 - **Location Statistics Header**: Shows "[X] jobs without locations" and "[Y] job locations in map"
 - **Distance Calculator**: Postal code input with real-time geocoding via Nominatim
 - **Interactive tooltips**: Map popups display calculated distances on click
-- **Postal code support**: Works with formats like US zip codes (94102), UK postcodes (SW1A0AA), etc.
+- **Postal code support**: Works with formats like Canadian postal codes (A1B 2C3), US zip codes (94102), and UK postcodes (SW1A0AA).
 
 ---
 
@@ -253,9 +254,8 @@ To populate the **Coordinates** column for map display:
 - All charts update based on filtered data
 
 ### 💾 Data Export
-- Download filtered data as CSV or PDF via the "Export" button
+- Download filtered data as CSV via the "Export" button
 - Filename includes current date
-- CSV and PDF export options available
 - Public users cannot export data
 
 ### 📱 Responsive Design

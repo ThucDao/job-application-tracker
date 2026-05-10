@@ -36,10 +36,11 @@ A powerful Streamlit web app for tracking job applications with **Google Sheets 
 
 ### 📋 Application Management
 - Horizontal top menu with Log in, Search, Filter, Export
+- Admin-only Import button opens the Google Sheets source data file
 - Login opens an email/password dialog
 - Search fields for company and job title
 - Filter dropdowns for status and location
-- Export dropdown offers Export to CSV and Export to PDF
+- Export button downloads CSV only
 - Table uses 1-based "No." indexing and includes Company Address before Job Location
 - Notes and Recruiter Info are hidden from the table for all users
 

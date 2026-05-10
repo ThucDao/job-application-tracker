@@ -15,6 +15,8 @@ import requests
 # ============================================================================
 # PAGE CONFIG & STYLING
 # ============================================================================
+SHEET_URL = st.secrets.get("sheet_url")
+
 st.set_page_config(
     page_title="Job Application Tracker",
     layout="wide",
@@ -29,7 +31,7 @@ st.markdown("""
         justify-content: center;
         align-items: center;
         padding: 15px 20px;
-        background-color: #f0f2f6;
+        background-color: #ffffff;
         border-bottom: 2px solid #e0e4e8;
         margin-bottom: 20px;
         border-radius: 5px;
@@ -39,16 +41,38 @@ st.markdown("""
         font-weight: 800;
         text-align: center;
         width: 100%;
+        color: #111111;
+        text-transform: uppercase;
     }
-    .nav-button {
-        width: 100%;
+    @media(min-width: 769px) {
+        .title-section {
+            font-size: 60px;
+        }
+    }
+    .nav-link-button {
+        display: inline-block;
+        text-decoration: none;
+        text-align: center;
         padding: 10px 14px;
         border-radius: 8px;
         border: 1px solid #7f8c8d;
         background-color: #ffffff;
         color: #2c3e50;
         font-weight: 600;
-        cursor: pointer;
+        width: 100%;
+        max-width: 160px;
+    }
+    .stButton button {
+        min-width: 0 !important;
+        max-width: 160px !important;
+        width: 100% !important;
+    }
+    .metric-card {
+        text-align: center;
+        padding: 18px 16px;
+        border-radius: 10px;
+        background-color: rgba(255,255,255,0.92);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .metric-number {
         font-size: 2.8rem;
@@ -67,11 +91,13 @@ st.markdown("""
         margin-bottom: 20px;
     }
     .location-stats {
-        background-color: #e8f4f8;
+        background-color: #ffffff;
+        color: #111111;
         padding: 10px;
         border-radius: 5px;
         margin-bottom: 10px;
         font-weight: 500;
+        border: 1px solid #d1d5db;
     }
     .privacy-notice {
         background-color: #fff3cd;
@@ -115,8 +141,6 @@ if "filter_status" not in st.session_state:
     st.session_state.filter_status = "All"
 if "filter_location" not in st.session_state:
     st.session_state.filter_location = "All"
-if "export_option" not in st.session_state:
-    st.session_state.export_option = "Export to CSV"
 if "selected_row_no" not in st.session_state:
     st.session_state.selected_row_no = 1
 
@@ -167,7 +191,6 @@ def logout():
     st.session_state.search_title = ""
     st.session_state.filter_status = "All"
     st.session_state.filter_location = "All"
-    st.session_state.export_option = "Export to CSV"
     st.session_state.selected_row_no = 1
     st.session_state.postal_code = ""
     st.session_state.postal_code_coords = None
@@ -175,27 +198,34 @@ def logout():
 
 # TOP NAVIGATION BAR
 st.markdown(
-    '<div class="top-navbar"><div class="title-section">Job Application Tracker</div></div>',
+    '<div class="top-navbar"><div class="title-section">JOB APPLICATION TRACKER</div></div>',
     unsafe_allow_html=True
 )
 
-menu_cols = st.columns([1, 1, 1, 1])
-with menu_cols[0]:
+nav_columns = st.columns([1, 1, 1, 1, 1] if st.session_state.user_tier == "admin" else [1, 1, 1, 1])
+with nav_columns[0]:
     if not st.session_state.authenticated:
         if st.button("Log in", key="nav_login"):
             st.session_state.active_nav = "login"
     else:
         user_label = "Admin" if st.session_state.user_tier == "admin" else "Viewer"
         st.markdown(f"**Logged in as {user_label}**")
-with menu_cols[1]:
+with nav_columns[1]:
     if st.button("Search", key="nav_search"):
         st.session_state.active_nav = "search"
-with menu_cols[2]:
+with nav_columns[2]:
     if st.button("Filter", key="nav_filter"):
         st.session_state.active_nav = "filter"
-with menu_cols[3]:
+with nav_columns[3]:
     if st.button("Export", key="nav_export"):
         st.session_state.active_nav = "export"
+if st.session_state.user_tier == "admin":
+    with nav_columns[4]:
+        if SHEET_URL:
+            st.markdown(
+                f'<a class="nav-link-button" href="{SHEET_URL}" target="_blank">Import</a>',
+                unsafe_allow_html=True
+            )
 
 if st.session_state.authenticated:
     logout_col1, logout_col2 = st.columns([9, 1])
@@ -233,12 +263,7 @@ elif st.session_state.active_nav == "filter":
     )
 
 elif st.session_state.active_nav == "export":
-    st.selectbox(
-        "Export options:",
-        ["Export to CSV", "Export to PDF"],
-        key="export_option"
-    )
-    st.info("Select an export option, then use the export action once data has loaded below.")
+    st.info("Export to CSV is available below once data has loaded.")
 
 st.markdown("---")
 
@@ -487,30 +512,6 @@ def export_to_csv(df):
     return csv
 
 
-def export_to_pdf(df):
-    """Export dataframe to a simple PDF document."""
-    try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "Job Applications", ln=True)
-        pdf.ln(4)
-        pdf.set_font("Arial", size=10)
-
-        display_df = df.copy()
-        display_df = display_df.drop(columns=[col for col in ["Notes", "Recruiter Info"] if col in display_df.columns], errors='ignore')
-
-        for idx, row in display_df.iterrows():
-            line = " | ".join([f"{col}: {row[col]}" for col in display_df.columns if pd.notna(row[col])])
-            pdf.multi_cell(0, 6, line)
-            pdf.ln(1)
-
-        return pdf.output(dest="S").encode("latin-1")
-    except Exception:
-        return None
-
-
 def parse_coordinates(coord_str):
     """Parse 'lat,lng' string to tuple"""
     try:
@@ -627,7 +628,18 @@ def plot_location_distribution(df):
         color_discrete_sequence=px.colors.qualitative.Plotly
     )
     fig.update_traces(textposition='inside', textinfo='percent+label')
-    fig.update_layout(showlegend=True)
+    fig.update_layout(
+        showlegend=True,
+        legend=dict(
+            orientation='h',
+            y=-0.15,
+            x=0.5,
+            xanchor='center',
+            yanchor='top',
+            title_text=''   
+        ),
+        margin=dict(t=40, b=80)
+    )
     return fig
 
 def plot_applications_per_day(df):
@@ -665,14 +677,21 @@ def plot_region_distribution(df):
     region_series = df["Company Address"].fillna("").apply(get_edmonton_region)
     region_counts = region_series.value_counts()
     fig = px.bar(
-        x=region_counts.index,
-        y=region_counts.values,
-        labels={"x": "Region", "y": "Applications"},
+        x=region_counts.values,
+        y=region_counts.index,
+        labels={"x": "Applications", "y": "Region"},
         title="Applications by Regions",
         color=region_counts.index,
-        color_discrete_sequence=px.colors.qualitative.Safe
+        color_discrete_sequence=px.colors.qualitative.Safe,
+        orientation='h'
     )
-    fig.update_layout(showlegend=False)
+    fig.update_layout(
+        showlegend=False,
+        xaxis_title="Applications",
+        yaxis_title="Region",
+        bargap=0.15,
+        bargroupgap=0.1
+    )
     return fig
 
 # ============================================================================
@@ -703,41 +722,29 @@ def main():
     filter_location = st.session_state.filter_location
 
     if st.session_state.active_nav == "export":
-        if st.session_state.export_option == "Export to CSV":
-            csv_data = export_to_csv(df_to_use)
-            st.download_button(
-                label="Download CSV",
-                data=csv_data,
-                file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-        elif st.session_state.export_option == "Export to PDF":
-            pdf_data = export_to_pdf(df_to_use)
-            if pdf_data:
-                st.download_button(
-                    label="Download PDF",
-                    data=pdf_data,
-                    file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.pdf",
-                    mime="application/pdf"
-                )
-            else:
-                st.warning("Unable to generate PDF export at this time.")
+        csv_data = export_to_csv(df_to_use)
+        st.download_button(
+            label="Download CSV",
+            data=csv_data,
+            file_name=f"job_applications_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
 
     # Apply filters
     df_filtered = apply_filters(df_to_use, search_company, search_title,
                                filter_status, filter_location)
 
     # SUMMARY METRICS - Responsive layout
-    st.markdown("### Summary Metrics")
+    st.markdown("<h3 style='text-align:center'>Summary Metrics</h3>", unsafe_allow_html=True)
     metrics = get_summary_metrics(df_filtered)
     
     st.markdown(
         f"""
         <div class="metrics-row">
-            <div><div class="metric-number">{metrics['applied']}</div><div class="metric-label">Applied</div></div>
-            <div><div class="metric-number">{metrics['rejected']}</div><div class="metric-label">Rejected</div></div>
-            <div><div class="metric-number">{metrics['interviews']}</div><div class="metric-label">Interviews</div></div>
-            <div><div class="metric-number">{metrics['offers']}</div><div class="metric-label">Offers</div></div>
+            <div class="metric-card"><div class="metric-number">{metrics['applied']}</div><div class="metric-label">Applied</div></div>
+            <div class="metric-card"><div class="metric-number">{metrics['rejected']}</div><div class="metric-label">Rejected</div></div>
+            <div class="metric-card"><div class="metric-number">{metrics['interviews']}</div><div class="metric-label">Interviews</div></div>
+            <div class="metric-card"><div class="metric-number">{metrics['offers']}</div><div class="metric-label">Offers</div></div>
         </div>
         """,
         unsafe_allow_html=True
@@ -791,27 +798,29 @@ def main():
                 selected_center_coords = parse_coordinates(selected_row.get("Coordinates", ""))
     
     with col2:
-        # Location stats header
+        # Location stats header and postal code input share a row
+        stats_col, postal_col = st.columns([1, 1])
         total_with_coords = len(df_filtered[df_filtered["Coordinates"].notna() & 
                                             (df_filtered["Coordinates"] != "")])
         total_without_coords = len(df_filtered) - total_with_coords
-        
-        st.markdown(
-            f'<div class="location-stats">'
-            f'📍 {total_without_coords} jobs without locations<br>'
-            f'📍 {total_with_coords} job locations in map'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-        
-        # Postal code distance calculator
-        postal_code_input = st.text_input(
-            "Enter Postal Code:",
-            value=st.session_state.postal_code,
-            placeholder="e.g., 94102 or SW1A0AA",
-            key="postal_input"
-        )
-        
+
+        with stats_col:
+            st.markdown(
+                f'<div class="location-stats">'
+                f'📍 {total_without_coords} jobs without locations<br>'
+                f'📍 {total_with_coords} job locations in map'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        with postal_col:
+            postal_code_input = st.text_input(
+                "Enter Postal Code:",
+                value=st.session_state.postal_code,
+                placeholder="e.g., A1B 2C3",
+                key="postal_input"
+            )
+
         postal_code_coords = None
         if postal_code_input:
             with st.spinner("🔍 Geocoding postal code..."):
@@ -823,7 +832,7 @@ def main():
 
         map_obj = generate_map(df_filtered, postal_code_coords, center_coords=selected_center_coords)
         if map_obj:
-            st_folium(map_obj, width=520, height=520)
+            st_folium(map_obj, width=420, height=420)
         else:
             st.info("📍 Add coordinates (Latitude,Longitude) to locations to see the map.")
     
