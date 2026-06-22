@@ -58,136 +58,113 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
     return sources
 
 def create_file_with_user_quota(gc: gspread.Client, name: str, folder_id: str, your_gmail: str) -> str:
-    """Creates a spreadsheet owned by the user (not the service account) to avoid SA quota limits."""
-    body = {
-        "name": name,
-        "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [folder_id]
-    }
+    """Create a new spreadsheet directly in the shared folder, trying multiple methods."""
+    try:
+        # Primary method: Use gspread's built-in create method
+        spreadsheet = gc.create(name, folder_id=folder_id)
+        file_id = spreadsheet.id
+        log.info(f"✅ Successfully created file '{name}' with ID: {file_id}")
+        
+        # Try to transfer ownership to your Gmail account
+        if your_gmail:
+            try:
+                gc.share(file_id, your_gmail, perm_type='user', role='owner', notify=False)
+                log.info(f"✅ Transferred ownership to {your_gmail}")
+            except Exception as te:
+                log.warning(f"Ownership transfer failed (file is still usable): {te}")
+        
+        return file_id
 
-    res = gc.http_client.request(
-        "post",
-        "https://www.googleapis.com/drive/v3/files",
-        json=body
-    ).json()
-    file_id = res.get("id")
-
-    if not file_id:
-        raise RuntimeError(f"Failed to create file: {res}")
-
-    if your_gmail:
-        # Transfer ownership BEFORE anything else, and raise on failure
-        transfer_res = gc.http_client.request(
-            "post",
-            f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
-            json={"role": "owner", "type": "user", "emailAddress": your_gmail},
-            params={"transferOwnership": "true", "sendNotificationEmail": "false"}
-        ).json()
-
-        if transfer_res.get("error"):
-            raise RuntimeError(
-                f"Ownership transfer failed for '{name}': {transfer_res['error']}. "
-                "Ensure your service account has 'Domain-wide Delegation' enabled, "
-                "or pre-share the folder with your Gmail as editor and run gcloud to transfer."
-            )
-
-        log.info(f"Created '{name}' and transferred ownership to {your_gmail}")
-
-    return file_id
+    except Exception as e:
+        log.error(f"Error creating file {name}: {e}")
+        
+        # Fallback: Use raw Drive API
+        try:
+            body = {
+                "name": name,
+                "mimeType": "application/vnd.google-apps.spreadsheet",
+                "parents": [folder_id]
+            }
+            res = gc.http_client.request(
+                "post", "https://www.googleapis.com/drive/v3/files", json=body
+            ).json()
+            file_id = res.get("id")
+            if file_id:
+                log.info(f"✅ Successfully created via raw API: {file_id}")
+                return file_id
+        except Exception as e2:
+            log.error(f"Raw API also failed: {e2}")
+        
+        raise RuntimeError(f"Failed to create file '{name}'. Error: {e}") from e
 
 def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
-    """Finds or dynamically generates the dedicated 'Job listings' directory and tracks outputs seamlessly."""
+    """Improved version that creates the 'Job listings' folder and daily files."""
     your_gmail = os.environ.get("GMAIL_SENDER")
     
-    # 1. Fetch source sheet metadata to locate its exact container folder location
+    # Get the parent folder of the source spreadsheet
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
-    parents = meta.get("parents", [])
-    parent_folder_id = parents[0] if parents else "root"
+    parent_folder_id = meta.get("parents", [None])[0] or "root"
 
-    # 2. Locate or dynamically generate the target directory folder
-    folder_id = None
-    query = f"name = 'Job listings' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{parent_folder_id}' in parents"
-    
+    # Find or create the "Job listings" folder
+    query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
     folder_search = gc.http_client.request(
-        "get", 
-        f"https://www.googleapis.com/drive/v3/files?q={quote_plus(query)}"
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(query)}"
     ).json().get("files", [])
-    
+
     if folder_search:
         folder_id = folder_search[0]["id"]
-        log.info(f"Found existing target folder with ID: {folder_id}")
+        log.info(f"Found existing 'Job listings' folder: {folder_id}")
     else:
         folder_body = {
-            "name": "Job listings",
-            "mimeType": "application/vnd.google-apps.folder",
+            "name": "Job listings", 
+            "mimeType": "application/vnd.google-apps.folder", 
             "parents": [parent_folder_id]
         }
-        res = gc.http_client.request(
-            "post",
-            "https://www.googleapis.com/drive/v3/files",
-            json=folder_body
-        ).json()
+        res = gc.http_client.request("post", "https://www.googleapis.com/drive/v3/files", json=folder_body).json()
         folder_id = res.get("id")
-        log.info(f"Generated clean 'Job listings' output folder: {folder_id}")
+        log.info(f"✅ Created 'Job listings' folder: {folder_id}")
         
         if your_gmail:
             try:
-                gc.share_file(folder_id, your_gmail, perm_type='user', role='writer')
+                gc.share_file(folder_id, your_gmail, role='writer')
             except Exception as e:
-                log.warning(f"Folder directory share notice: {e}")
+                log.warning(f"Failed to share folder: {e}")
 
+    # Define file names
     master_title = "All job listings"
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_title = f"Jobs {today_str}"
-    
+
     master_sheet = None
     daily_sheet = None
-    
-    # 3. Query files sitting inside the dedicated output folder
-    file_query = f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and '{folder_id}' in parents"
-    file_search = gc.http_client.request(
-        "get",
-        f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
+
+    # Search for existing files in the folder
+    file_query = f"mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
+    files = gc.http_client.request(
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
     ).json().get("files", [])
-    
-    for f in file_search:
+
+    for f in files:
         if f["name"] == master_title:
             master_sheet = gc.open_by_key(f["id"])
-        if f["name"] == daily_title:
+        elif f["name"] == daily_title:
             daily_sheet = gc.open_by_key(f["id"])
-            
-    # 4. Safe automated spreadsheet instantiation bypassing service account quota blocks
+
+    # Create Master sheet if it doesn't exist
     if not master_sheet:
-        try:
-            f_id = create_file_with_user_quota(gc, master_title, folder_id, your_gmail)
-        except APIError as e:
-            raise RuntimeError(
-                "Unable to create master spreadsheet. "
-                "Google Drive storage quota appears to be exceeded. "
-                "Please free up Drive space or pre-create 'All job listings' in the target folder. "
-                f"Original error: {e}"
-            ) from e
-        master_sheet = gc.open_by_key(f_id)
-        ws = master_sheet.get_worksheet(0)
-        ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Generated master tracking storage file: {master_title}")
-        
+        fid = create_file_with_user_quota(gc, master_title, folder_id, your_gmail)
+        master_sheet = gc.open_by_key(fid)
+        master_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        log.info(f"✅ Created Master sheet: {master_title}")
+
+    # Create Daily sheet if it doesn't exist
     if not daily_sheet:
-        try:
-            f_id = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail)
-        except APIError as e:
-            raise RuntimeError(
-                "Unable to create daily snapshot spreadsheet. "
-                "Google Drive storage quota appears to be exceeded. "
-                "Please free up Drive space or pre-create today's 'Jobs yyyy-mm-dd' file in the target folder. "
-                f"Original error: {e}"
-            ) from e
-        daily_sheet = gc.open_by_key(f_id)
-        ws = daily_sheet.get_worksheet(0)
-        ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Generated custom daily snapshot log file: {daily_title}")
-        
-    return master_sheet.get_worksheet(0), daily_sheet.get_worksheet(0)
+        fid = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail)
+        daily_sheet = gc.open_by_key(fid)
+        daily_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        log.info(f"✅ Created new Daily sheet: {daily_title}")
+
+    return master_sheet.sheet1, daily_sheet.sheet1
 
 def already_logged_master(ws: gspread.Worksheet, job_url: str) -> bool:
     try:
