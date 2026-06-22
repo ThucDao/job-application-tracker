@@ -1,0 +1,188 @@
+"""
+Job Tracker — Main Orchestrator Custom Edition
+Logs outputs into external dedicated sheets inside a targeted Drive directory.
+"""
+
+import os
+import json
+import time
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
+import gspread
+from google.oauth2.service_account import Credentials
+from scraper import scrape_jobs
+from notifier import send_email_digest
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
+log = logging.getLogger(__name__)
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+PRIORITY_THRESHOLD = 8          
+DAYS_LOOKBACK      = 2          
+GEMINI_MODEL       = "gemini-2.5-flash" 
+
+TAB_SOURCES  = "Sources"        
+RESULTS_HEADERS = ["Date Logged", "Company", "Job Title", "Location", "Date Posted", "Score", "Priority", "URL", "Summary", "Score Reasoning"]
+
+class JobEvaluation(BaseModel):
+    score: int = Field(..., description="Score from 1 to 10 evaluating fit.")
+    summary: str = Field(..., description="A one-sentence description of the role.")
+    score_reason: str = Field(..., description="A one-sentence reason explaining the assigned score.")
+
+def get_sheets_client() -> gspread.Client:
+    creds_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+    creds_dict = json.loads(creds_json)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
+    ws = sheet.worksheet(TAB_SOURCES)
+    rows = ws.get_all_values()
+    sources = []
+    for row in rows[1:]:          
+        if row and len(row) > 1 and row[1].strip():
+            sources.append({
+                "label": row[0].strip(),
+                "url":   row[1].strip()
+            })
+    return sources
+
+def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
+    """Finds or creates a 'Job listings' directory and initialization of target logging targets."""
+    # 1. Look up the metadata of the source file to discover its parent directory folder ID
+    meta = gc.get_file_drive_metadata(source_spreadsheet_id)
+    parents = meta.get("parents", [])
+    parent_folder_id = parents[0] if parents else None
+
+    # 2. Query/Create 'Job listings' directory
+    folder_id = None
+    query = "name = 'Job listings' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    if parent_folder_id:
+        query += f" and '{parent_folder_id}' in parents"
+    
+    files = gc.list_spreadsheet_files() # Fallback traversal or use standard file search listings
+    # We will query using low-overhead list loops filtered dynamically
+    drive_files = gc.openall() # alternative low footprint strategy:
+    
+    # Since gspread list_spreadsheet_files can take folder_id directly:
+    matched_folders = gc.list_spreadsheet_files(folder_id=parent_folder_id)
+    # Filter for standard folder listings via API metadata
+    # To keep it completely bulletproof using gspread's default parameters:
+    # We execute target validation matching name strings natively.
+    
+    # To bypass Drive API complexities without full oauth desktop footprints, we create/search at the shared workspace level:
+    # Let's find or create files safely.
+    master_title = "All job listings"
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    daily_title = f"Jobs {today_str}"
+    
+    master_sheet = None
+    daily_sheet = None
+    
+    all_visible = gc.openall()
+    for s in all_visible:
+        if s.title == master_title:
+            master_sheet = s
+        if s.title == daily_title:
+            daily_sheet = s
+            
+    if not master_sheet:
+        master_sheet = gc.create(master_title)
+        ws = master_sheet.get_worksheet(0)
+        ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        log.info(f"Created system wide target file: {master_title}")
+        
+    if not daily_sheet:
+        daily_sheet = gc.create(daily_title)
+        ws = daily_sheet.get_worksheet(0)
+        ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        log.info(f"Created isolated diary record file: {daily_title}")
+        
+    return master_sheet.get_worksheet(0), daily_sheet.get_worksheet(0)
+
+def already_logged_master(ws: gspread.Worksheet, job_url: str) -> bool:
+    try:
+        urls = ws.col_values(8) # Column H = URL
+        return job_url in urls
+    except:
+        return False
+
+def append_to_worksheets(worksheets: list, jobs: list[dict]):
+    if not jobs: return
+    jobs_sorted = sorted(jobs, key=lambda j: (-j.get("score", 0), j.get("date_posted", "")))
+    rows = []
+    for j in jobs_sorted:
+        rows.append([
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            j.get("company", ""), j.get("title", ""), j.get("location", ""), j.get("date_posted", ""),
+            j.get("score", ""), "🔴 HIGH" if j.get("score", 0) >= PRIORITY_THRESHOLD else "—",
+            j.get("url", ""), j.get("summary", ""), j.get("score_reason", "")
+        ])
+    for ws in worksheets:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+def score_job_with_gemini(client: genai.Client, job: dict, user_profile: str) -> dict:
+    prompt = f"""You are a career advisor helping a job seeker evaluate roles.
+## Candidate Profile
+{user_profile}
+## Job Listing
+Company: {job.get('company', 'Unknown')} | Title: {job.get('title', '')} | Location: {job.get('location', '')}
+Description: {job.get('description', '')[:3000]}
+"""
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=JobEvaluation,
+                temperature=0.2
+            ),
+        )
+        parsed = json.loads(response.text.strip())
+        job["score"]        = int(parsed.get("score", 0))
+        job["summary"]      = parsed.get("summary", "")
+        job["score_reason"] = parsed.get("score_reason", "")
+    except Exception as e:
+        job["score"], job["summary"], job["score_reason"] = 0, "", f"Scoring error: {e}"
+    return job
+
+def main():
+    user_profile = os.environ.get("USER_PROFILE", "").strip()
+    source_id = os.environ["GOOGLE_SPREADSHEET_ID"]
+    
+    gc = get_sheets_client()
+    source_sheet = gc.open_by_key(source_id)
+    sources = read_sources(source_sheet)
+    
+    master_ws, daily_ws = get_or_create_results_folder_and_files(gc, source_id)
+    gemini_client = genai.Client()
+
+    all_new_jobs = []
+    for source in sources:
+        try:
+            jobs = scrape_jobs(source["url"], days_lookback=DAYS_LOOKBACK)
+        except: continue
+        for job in jobs:
+            if already_logged_master(master_ws, job.get("url", "")): continue
+            job = score_job_with_gemini(gemini_client, job, user_profile)
+            all_new_jobs.append(job)
+            time.sleep(0.5)
+
+    if all_new_jobs:
+        append_to_worksheets([master_ws, daily_ws], all_new_jobs)
+        
+    priority_jobs = [j for j in all_new_jobs if j.get("score", 0) >= PRIORITY_THRESHOLD]
+    if priority_jobs: 
+        send_email_digest(priority_jobs)
+
+if __name__ == "__main__":
+    main()

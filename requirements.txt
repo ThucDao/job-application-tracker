@@ -1,5 +1,7 @@
 streamlit
-gspread
+google-genai>=0.1.1
+gspread>=6.0.0
+google-auth>=2.29.0
 google-auth-oauthlib
 google-auth-httplib2
 google-cloud-storage
@@ -10,5 +12,7 @@ streamlit-folium
 streamlit-authenticator
 st-gsheets-connection
 pyotp
-requests
+requests>=2.31.0
 fpdf2
+beautifulsoup4>=4.12.0
+lxml>=5.2.0
