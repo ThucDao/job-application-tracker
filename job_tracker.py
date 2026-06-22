@@ -57,41 +57,38 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
             })
     return sources
 
-def get_or_create_master_sheet(gc: gspread.Client, source_spreadsheet_id: str):
-    """Get or create the single master sheet named 'All job listings'."""
-    # Get parent folder
+def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
+    """Open the existing master sheet named 'All job listings'."""
+    # Get parent folder of source spreadsheet
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parent_folder_id = meta.get("parents", [None])[0] or "root"
+    log.info(f"Source spreadsheet parent folder ID: {parent_folder_id}")
 
-    # Find or create "Job listings" folder
-    query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
+    # Find "Job listings" folder
+    folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
     folder_search = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(query)}"
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(folder_query)}"
     ).json().get("files", [])
 
-    if folder_search:
-        folder_id = folder_search[0]["id"]
-    else:
-        folder_body = {"name": "Job listings", "mimeType": "application/vnd.google-apps.folder", "parents": [parent_folder_id]}
-        res = gc.http_client.request("post", "https://www.googleapis.com/drive/v3/files", json=folder_body).json()
-        folder_id = res.get("id")
+    if not folder_search:
+        raise RuntimeError(f"Folder 'Job listings' not found in parent folder {parent_folder_id}. Please create it manually.")
+    
+    folder_id = folder_search[0]["id"]
+    log.info(f"Found 'Job listings' folder: {folder_id}")
 
-    master_title = "All job listings"
-    master_sheet = None
-
-    # Search existing files
-    files = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(f'mimeType=\"application/vnd.google-apps.spreadsheet\" and trashed=false and "{folder_id}" in parents')}"
+    # Search for "All job listings" spreadsheet in the Job listings folder
+    sheet_query = f"name='All job listings' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
+    sheet_search = gc.http_client.request(
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(sheet_query)}"
     ).json().get("files", [])
 
-    for f in files:
-        if f["name"] == master_title:
-            master_sheet = gc.open_by_key(f["id"])
-            break
-
-    if not master_sheet:
-        raise RuntimeError("Existing spreadsheet 'All job listings' not found in the target folder. Please create it manually before running the tracker.")
-
+    if not sheet_search:
+        raise RuntimeError(f"Spreadsheet 'All job listings' not found in the 'Job listings' folder. Please create it manually.")
+    
+    file_id = sheet_search[0]["id"]
+    log.info(f"Found 'All job listings' spreadsheet: {file_id}")
+    
+    master_sheet = gc.open_by_key(file_id)
     return master_sheet.sheet1
 
 def already_logged_master(ws: gspread.Worksheet, job_url: str) -> bool:
@@ -152,7 +149,7 @@ def main():
     source_sheet = gc.open_by_key(source_id)
     sources = read_sources(source_sheet)
     
-    master_ws = get_or_create_master_sheet(gc, source_id)
+    master_ws = get_job_listings_file(gc, source_id)
     gemini_client = genai.Client()
 
     all_new_jobs = []
