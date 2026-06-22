@@ -9,11 +9,13 @@ import time
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote_plus
 
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 import gspread
+from gspread.exceptions import APIError
 from google.oauth2.service_account import Credentials
 from scraper import scrape_jobs
 from notifier import send_email_digest
@@ -108,7 +110,7 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     
     folder_search = gc.http_client.request(
         "get", 
-        f"https://www.googleapis.com/drive/v3/files?q={query}"
+        f"https://www.googleapis.com/drive/v3/files?q={quote_plus(query)}"
     ).json().get("files", [])
     
     if folder_search:
@@ -145,7 +147,7 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     file_query = f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and '{folder_id}' in parents"
     file_search = gc.http_client.request(
         "get",
-        f"https://www.googleapis.com/drive/v3/files?q={file_query}"
+        f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
     ).json().get("files", [])
     
     for f in file_search:
@@ -156,14 +158,30 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
             
     # 4. Safe automated spreadsheet instantiation bypassing service account quota blocks
     if not master_sheet:
-        f_id = create_file_with_user_quota(gc, master_title, folder_id, your_gmail)
+        try:
+            f_id = create_file_with_user_quota(gc, master_title, folder_id, your_gmail)
+        except APIError as e:
+            raise RuntimeError(
+                "Unable to create master spreadsheet. "
+                "Google Drive storage quota appears to be exceeded. "
+                "Please free up Drive space or pre-create 'All job listings' in the target folder. "
+                f"Original error: {e}"
+            ) from e
         master_sheet = gc.open_by_key(f_id)
         ws = master_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
         log.info(f"Generated master tracking storage file: {master_title}")
         
     if not daily_sheet:
-        f_id = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail)
+        try:
+            f_id = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail)
+        except APIError as e:
+            raise RuntimeError(
+                "Unable to create daily snapshot spreadsheet. "
+                "Google Drive storage quota appears to be exceeded. "
+                "Please free up Drive space or pre-create today's 'Jobs yyyy-mm-dd' file in the target folder. "
+                f"Original error: {e}"
+            ) from e
         daily_sheet = gc.open_by_key(f_id)
         ws = daily_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
