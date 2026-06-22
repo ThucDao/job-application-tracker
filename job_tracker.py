@@ -56,30 +56,49 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
     return sources
 
 def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
-    """Finds or creates a 'Job listings' directory and initialization of target logging targets."""
-    # 1. Look up the metadata of the source file to discover its parent directory folder ID
+    """Finds or creates a 'Job listings' directory at the same level as the source sheet, then initializes target sheets."""
+    your_gmail = os.environ.get("GMAIL_SENDER")
+    
+    # 1. Get the parent folder ID of the source file
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parents = meta.get("parents", [])
-    parent_folder_id = parents[0] if parents else None
+    parent_folder_id = parents[0] if parents else "root"
 
-    # 2. Query/Create 'Job listings' directory
+    # 2. Find or create the 'Job listings' folder
     folder_id = None
-    query = "name = 'Job listings' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    if parent_folder_id:
-        query += f" and '{parent_folder_id}' in parents"
+    query = f"name = 'Job listings' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{parent_folder_id}' in parents"
     
-    files = gc.list_spreadsheet_files() # Fallback traversal or use standard file search listings
-    # We will query using low-overhead list loops filtered dynamically
-    drive_files = gc.openall() # alternative low footprint strategy:
+    # Drive API direct query via gspread client
+    folder_search = gc.http_client.request(
+        "get", 
+        f"https://www.googleapis.com/drive/v3/files?q={query}"
+    ).json().get("files", [])
     
-    # Since gspread list_spreadsheet_files can take folder_id directly:
-    matched_folders = gc.list_spreadsheet_files(folder_id=parent_folder_id)
-    # Filter for standard folder listings via API metadata
-    # To keep it completely bulletproof using gspread's default parameters:
-    # We execute target validation matching name strings natively.
-    
-    # To bypass Drive API complexities without full oauth desktop footprints, we create/search at the shared workspace level:
-    # Let's find or create files safely.
+    if folder_search:
+        folder_id = folder_search[0]["id"]
+        log.info(f"Found existing 'Job listings' folder with ID: {folder_id}")
+    else:
+        # Construct directory metadata payload
+        body = {
+            "name": "Job listings",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id]
+        }
+        res = gc.http_client.request(
+            "post",
+            "https://www.googleapis.com/drive/v3/files",
+            json=body
+        ).json()
+        folder_id = res.get("id")
+        log.info(f"Created new 'Job listings' folder with ID: {folder_id}")
+        
+        # Share folder with user if ownership transfer can't be done directly on folder metadata
+        if your_gmail:
+            try:
+                gc.share_file(folder_id, your_gmail, perm_type='user', role='writer')
+            except Exception as e:
+                log.warning(f"Failed to share directory with user: {e}")
+
     master_title = "All job listings"
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_title = f"Jobs {today_str}"
@@ -87,25 +106,47 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     master_sheet = None
     daily_sheet = None
     
-    # Check what files the account can currently acces
-    all_visible = gc.openall()
-    for s in all_visible:
-        if s.title == master_title:
-            master_sheet = s
-        if s.title == daily_title:
-            daily_sheet = s
+    # 3. Search for target tracking sheets inside the specific target folder directory location
+    file_query = f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and '{folder_id}' in parents"
+    file_search = gc.http_client.request(
+        "get",
+        f"https://www.googleapis.com/drive/v3/files?q={file_query}"
+    ).json().get("files", [])
+    
+    for f in file_search:
+        if f["name"] == master_title:
+            master_sheet = gc.open_by_key(f["id"])
+        if f["name"] == daily_title:
+            daily_sheet = gc.open_by_key(f["id"])
             
+    # 4. Initialize files inside the folder if missing, transferring ownership to clear quota limits
     if not master_sheet:
-        master_sheet = gc.create(master_title)
+        master_sheet = gc.create(master_title, folder_id=folder_id)
+        if your_gmail:
+            try:
+                master_sheet.share(your_gmail, perm_type='user', role='owner', transfer_ownership=True)
+                log.info(f"Transferred ownership of '{master_title}' to {your_gmail}")
+            except Exception as e:
+                log.warning(f"Could not transfer owner for master sheet: {e}. Sharing as editor instead.")
+                master_sheet.share(your_gmail, perm_type='user', role='writer')
+        
         ws = master_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Created system wide target file: {master_title}")
+        log.info(f"Created system wide target file inside folder: {master_title}")
         
     if not daily_sheet:
-        daily_sheet = gc.create(daily_title)
+        daily_sheet = gc.create(daily_title, folder_id=folder_id)
+        if your_gmail:
+            try:
+                daily_sheet.share(your_gmail, perm_type='user', role='owner', transfer_ownership=True)
+                log.info(f"Transferred ownership of '{daily_title}' to {your_gmail}")
+            except Exception as e:
+                log.warning(f"Could not transfer owner for daily sheet: {e}. Sharing as editor instead.")
+                daily_sheet.share(your_gmail, perm_type='user', role='writer')
+                
         ws = daily_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Created isolated diary record file: {daily_title}")
+        log.info(f"Created isolated diary record file inside folder: {daily_title}")
         
     return master_sheet.get_worksheet(0), daily_sheet.get_worksheet(0)
 
