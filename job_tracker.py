@@ -57,55 +57,49 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
             })
     return sources
 
-def create_file_with_user_quota(gc: gspread.Client, name: str, folder_id: str, your_gmail: str) -> str:
-    """Create a new spreadsheet directly in the shared folder, trying multiple methods."""
+def create_file_with_user_quota(gc: gspread.Client, name: str, folder_id: str, your_gmail: str, template_id: str = None) -> str:
+    """Create daily sheet by copying a template (avoids service account quota issue)."""
     try:
-        # Primary method: Use gspread's built-in create method
-        spreadsheet = gc.create(name, folder_id=folder_id)
-        file_id = spreadsheet.id
-        log.info(f"✅ Successfully created file '{name}' with ID: {file_id}")
-        
-        # Try to transfer ownership to your Gmail account
-        if your_gmail:
-            try:
-                gc.share(file_id, your_gmail, perm_type='user', role='owner', notify=False)
-                log.info(f"✅ Transferred ownership to {your_gmail}")
-            except Exception as te:
-                log.warning(f"Ownership transfer failed (file is still usable): {te}")
-        
-        return file_id
-
-    except Exception as e:
-        log.error(f"Error creating file {name}: {e}")
-        
-        # Fallback: Use raw Drive API
-        try:
+        if template_id:
+            # Copy the template - this usually succeeds even with 0-quota SA
             body = {
                 "name": name,
-                "mimeType": "application/vnd.google-apps.spreadsheet",
                 "parents": [folder_id]
             }
             res = gc.http_client.request(
-                "post", "https://www.googleapis.com/drive/v3/files", json=body
+                "post",
+                f"https://www.googleapis.com/drive/v3/files/{template_id}/copy",
+                json=body
             ).json()
             file_id = res.get("id")
             if file_id:
-                log.info(f"✅ Successfully created via raw API: {file_id}")
+                log.info(f"✅ Created '{name}' by copying template. ID: {file_id}")
+                
+                # Try transfer ownership
+                if your_gmail:
+                    try:
+                        gc.share(file_id, your_gmail, perm_type='user', role='owner', notify=False)
+                    except:
+                        pass
                 return file_id
-        except Exception as e2:
-            log.error(f"Raw API also failed: {e2}")
-        
-        raise RuntimeError(f"Failed to create file '{name}'. Error: {e}") from e
+    except Exception as e:
+        log.warning(f"Template copy failed: {e}")
+
+    # Fallback to normal create (will likely fail)
+    log.warning("Template copy failed, trying direct create...")
+    spreadsheet = gc.create(name, folder_id=folder_id)
+    return spreadsheet.id
+
 
 def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
-    """Improved version that creates the 'Job listings' folder and daily files."""
+    """Uses template copying for daily files."""
     your_gmail = os.environ.get("GMAIL_SENDER")
     
-    # Get the parent folder of the source spreadsheet
+    # Get parent folder
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parent_folder_id = meta.get("parents", [None])[0] or "root"
 
-    # Find or create the "Job listings" folder
+    # Find or create "Job listings" folder
     query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
     folder_search = gc.http_client.request(
         "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(query)}"
@@ -113,35 +107,33 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
 
     if folder_search:
         folder_id = folder_search[0]["id"]
-        log.info(f"Found existing 'Job listings' folder: {folder_id}")
     else:
-        folder_body = {
-            "name": "Job listings", 
-            "mimeType": "application/vnd.google-apps.folder", 
-            "parents": [parent_folder_id]
-        }
+        folder_body = {"name": "Job listings", "mimeType": "application/vnd.google-apps.folder", "parents": [parent_folder_id]}
         res = gc.http_client.request("post", "https://www.googleapis.com/drive/v3/files", json=folder_body).json()
         folder_id = res.get("id")
-        log.info(f"✅ Created 'Job listings' folder: {folder_id}")
-        
         if your_gmail:
-            try:
-                gc.share_file(folder_id, your_gmail, role='writer')
-            except Exception as e:
-                log.warning(f"Failed to share folder: {e}")
+            gc.share_file(folder_id, your_gmail, role='writer')
 
-    # Define file names
+    # === Template setup ===
+    template_name = "Job Sheet Template"
+    template_id = None
+    file_query = f"name='{template_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
+    templates = gc.http_client.request(
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
+    ).json().get("files", [])
+    if templates:
+        template_id = templates[0]["id"]
+
+    # File names
     master_title = "All job listings"
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_title = f"Jobs {today_str}"
 
-    master_sheet = None
-    daily_sheet = None
+    master_sheet = daily_sheet = None
 
-    # Search for existing files in the folder
-    file_query = f"mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
+    # Search existing files
     files = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(f'mimeType=\"application/vnd.google-apps.spreadsheet\" and trashed=false and \"{folder_id}\" in parents')}"
     ).json().get("files", [])
 
     for f in files:
@@ -150,19 +142,28 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
         elif f["name"] == daily_title:
             daily_sheet = gc.open_by_key(f["id"])
 
-    # Create Master sheet if it doesn't exist
+    # Create Master if missing
     if not master_sheet:
-        fid = create_file_with_user_quota(gc, master_title, folder_id, your_gmail)
+        fid = create_file_with_user_quota(gc, master_title, folder_id, your_gmail, template_id)
         master_sheet = gc.open_by_key(fid)
-        master_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"✅ Created Master sheet: {master_title}")
+        # Ensure headers
+        try:
+            if not master_sheet.sheet1.get_all_values():
+                master_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        except:
+            pass
 
-    # Create Daily sheet if it doesn't exist
+    # Create Daily sheet by copying template
     if not daily_sheet:
-        fid = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail)
+        fid = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail, template_id)
         daily_sheet = gc.open_by_key(fid)
-        daily_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"✅ Created new Daily sheet: {daily_title}")
+        # Ensure headers
+        try:
+            if len(daily_sheet.sheet1.get_all_values()) <= 1:
+                daily_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
+        except:
+            pass
+        log.info(f"✅ Created new daily sheet: {daily_title}")
 
     return master_sheet.sheet1, daily_sheet.sheet1
 
