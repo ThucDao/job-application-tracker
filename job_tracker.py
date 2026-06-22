@@ -87,6 +87,7 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     master_sheet = None
     daily_sheet = None
     
+    # Check what files the account can currently acces
     all_visible = gc.openall()
     for s in all_visible:
         if s.title == master_title:
@@ -128,6 +129,7 @@ def append_to_worksheets(worksheets: list, jobs: list[dict]):
         ])
     for ws in worksheets:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
+        log.info(f"Appended records to worksheet: {ws.title}")
 
 def score_job_with_gemini(client: genai.Client, job: dict, user_profile: str) -> dict:
     prompt = f"""You are a career advisor helping a job seeker evaluate roles.
@@ -135,7 +137,7 @@ def score_job_with_gemini(client: genai.Client, job: dict, user_profile: str) ->
 {user_profile}
 ## Job Listing
 Company: {job.get('company', 'Unknown')} | Title: {job.get('title', '')} | Location: {job.get('location', '')}
-Description: {job.get('description', '')[:3000]}
+Description: {job.get('description', '')}
 """
     try:
         response = client.models.generate_content(
@@ -152,10 +154,12 @@ Description: {job.get('description', '')[:3000]}
         job["summary"]      = parsed.get("summary", "")
         job["score_reason"] = parsed.get("score_reason", "")
     except Exception as e:
+        log.warning(f"Gemini evaluation failed for {job.get('title')}: {e}")
         job["score"], job["summary"], job["score_reason"] = 0, "", f"Scoring error: {e}"
     return job
 
 def main():
+    log.info("━━━ Starting Gemini Job Tracker (Root Deployment) ━━━")
     user_profile = os.environ.get("USER_PROFILE", "").strip()
     source_id = os.environ["GOOGLE_SPREADSHEET_ID"]
     
@@ -168,12 +172,21 @@ def main():
 
     all_new_jobs = []
     for source in sources:
+        log.info(f"Scraping: {source['url']}")
         try:
             jobs = scrape_jobs(source["url"], days_lookback=DAYS_LOOKBACK)
-        except: continue
+            log.info(f"  → Found {len(jobs)} recent listings")
+        except Exception as e:
+            log.error(f"  → Scrape failed: {e}")
+            continue
+
         for job in jobs:
-            if already_logged_master(master_ws, job.get("url", "")): continue
+            if already_logged_master(master_ws, job.get("url", "")):
+                log.info(f"  ↷ Already exists in master: {job.get('title')}")
+                continue
+
             job = score_job_with_gemini(gemini_client, job, user_profile)
+            log.info(f"  ✓ {job['title']} @ {job.get('company','?')} — Score: {job['score']}")
             all_new_jobs.append(job)
             time.sleep(0.5)
 
@@ -182,7 +195,10 @@ def main():
         
     priority_jobs = [j for j in all_new_jobs if j.get("score", 0) >= PRIORITY_THRESHOLD]
     if priority_jobs: 
+        log.info(f"Sending email digest for {len(priority_jobs)} items...")
         send_email_digest(priority_jobs)
+    else:
+        log.info("No high priority matches detected today.")
 
 if __name__ == "__main__":
     main()
