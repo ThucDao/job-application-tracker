@@ -56,40 +56,41 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
     return sources
 
 def create_file_with_user_quota(gc: gspread.Client, name: str, folder_id: str, your_gmail: str) -> str:
-    """Creates a spreadsheet directly under the user's quota space to bypass service account limitations."""
-    # Build file metadata mapping it inside the target folder right at initialization
+    """Creates a spreadsheet owned by the user (not the service account) to avoid SA quota limits."""
     body = {
         "name": name,
         "mimeType": "application/vnd.google-apps.spreadsheet",
         "parents": [folder_id]
     }
-    
-    # Post creation parameters via direct Drive API v3 HTTP call
+
     res = gc.http_client.request(
         "post",
         "https://www.googleapis.com/drive/v3/files",
         json=body
     ).json()
     file_id = res.get("id")
-    
+
     if not file_id:
-        raise RuntimeError(f"Failed to initialize file metadata wrapper via API: {res}")
-        
-    # Instantly apply user permissions and execute background ownership transfer
+        raise RuntimeError(f"Failed to create file: {res}")
+
     if your_gmail:
-        try:
-            # First share as writer to verify contact path
-            gc.share_file(file_id, your_gmail, perm_type='user', role='writer')
-            # Upgrade directly to owner to apply your 15GB free storage pool immediately
-            gc.http_client.request(
-                "post",
-                f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions?transferOwnership=true",
-                json={"role": "owner", "type": "user", "emailAddress": your_gmail}
+        # Transfer ownership BEFORE anything else, and raise on failure
+        transfer_res = gc.http_client.request(
+            "post",
+            f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+            json={"role": "owner", "type": "user", "emailAddress": your_gmail},
+            params={"transferOwnership": "true", "sendNotificationEmail": "false"}
+        ).json()
+
+        if transfer_res.get("error"):
+            raise RuntimeError(
+                f"Ownership transfer failed for '{name}': {transfer_res['error']}. "
+                "Ensure your service account has 'Domain-wide Delegation' enabled, "
+                "or pre-share the folder with your Gmail as editor and run gcloud to transfer."
             )
-            log.info(f"Initialized '{name}' and transferred storage ownership to {your_gmail}")
-        except Exception as e:
-            log.warning(f"Ownership alignment warning for file '{name}': {e}")
-            
+
+        log.info(f"Created '{name}' and transferred ownership to {your_gmail}")
+
     return file_id
 
 def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
