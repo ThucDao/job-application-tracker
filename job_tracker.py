@@ -56,7 +56,7 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
     return sources
 
 def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
-    """Finds or creates a 'Job listings' directory at the same level as the source sheet, then initializes target sheets."""
+    """Finds or creates a 'Job listings' directory at the same level as the source sheet, then initializes target sheets safely."""
     your_gmail = os.environ.get("GMAIL_SENDER")
     
     # 1. Get the parent folder ID of the source file
@@ -68,7 +68,6 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     folder_id = None
     query = f"name = 'Job listings' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{parent_folder_id}' in parents"
     
-    # Drive API direct query via gspread client
     folder_search = gc.http_client.request(
         "get", 
         f"https://www.googleapis.com/drive/v3/files?q={query}"
@@ -78,7 +77,6 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
         folder_id = folder_search[0]["id"]
         log.info(f"Found existing 'Job listings' folder with ID: {folder_id}")
     else:
-        # Construct directory metadata payload
         body = {
             "name": "Job listings",
             "mimeType": "application/vnd.google-apps.folder",
@@ -92,7 +90,6 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
         folder_id = res.get("id")
         log.info(f"Created new 'Job listings' folder with ID: {folder_id}")
         
-        # Share folder with user if ownership transfer can't be done directly on folder metadata
         if your_gmail:
             try:
                 gc.share_file(folder_id, your_gmail, perm_type='user', role='writer')
@@ -106,7 +103,7 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
     master_sheet = None
     daily_sheet = None
     
-    # 3. Search for target tracking sheets inside the specific target folder directory location
+    # 3. Search for existing sheets inside the targeted folder
     file_query = f"mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and '{folder_id}' in parents"
     file_search = gc.http_client.request(
         "get",
@@ -119,34 +116,50 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
         if f["name"] == daily_title:
             daily_sheet = gc.open_by_key(f["id"])
             
-    # 4. Initialize files inside the folder if missing, transferring ownership to clear quota limits
+    # 4. Safe file creation template using API metadata overrides
     if not master_sheet:
-        master_sheet = gc.create(master_title, folder_id=folder_id)
+        # Create directly in root to establish base metadata structure
+        master_sheet = gc.create(master_title)
+        file_id = master_sheet.id
+        
         if your_gmail:
             try:
+                # Share and transfer ownership immediately to bypass quota blocks
                 master_sheet.share(your_gmail, perm_type='user', role='owner', transfer_ownership=True)
-                log.info(f"Transferred ownership of '{master_title}' to {your_gmail}")
+                
+                # Move the file from root into the 'Job listings' folder destination
+                gc.http_client.request(
+                    "patch",
+                    f"https://www.googleapis.com/drive/v3/files/{file_id}?addParents={folder_id}&removeParents=root"
+                )
+                log.info(f"Successfully moved '{master_title}' into destination folder.")
             except Exception as e:
-                log.warning(f"Could not transfer owner for master sheet: {e}. Sharing as editor instead.")
+                log.warning(f"Fallback sharing sequence initialized for master sheet: {e}")
                 master_sheet.share(your_gmail, perm_type='user', role='writer')
         
         ws = master_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Created system wide target file inside folder: {master_title}")
+        log.info(f"Initialized Master file pipeline: {master_title}")
         
     if not daily_sheet:
-        daily_sheet = gc.create(daily_title, folder_id=folder_id)
+        daily_sheet = gc.create(daily_title)
+        file_id = daily_sheet.id
+        
         if your_gmail:
             try:
                 daily_sheet.share(your_gmail, perm_type='user', role='owner', transfer_ownership=True)
-                log.info(f"Transferred ownership of '{daily_title}' to {your_gmail}")
+                gc.http_client.request(
+                    "patch",
+                    f"https://www.googleapis.com/drive/v3/files/{file_id}?addParents={folder_id}&removeParents=root"
+                )
+                log.info(f"Successfully moved '{daily_title}' into destination folder.")
             except Exception as e:
-                log.warning(f"Could not transfer owner for daily sheet: {e}. Sharing as editor instead.")
+                log.warning(f"Fallback sharing sequence initialized for daily sheet: {e}")
                 daily_sheet.share(your_gmail, perm_type='user', role='writer')
                 
         ws = daily_sheet.get_worksheet(0)
         ws.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        log.info(f"Created isolated diary record file inside folder: {daily_title}")
+        log.info(f"Initialized Daily Snapshot file pipeline: {daily_title}")
         
     return master_sheet.get_worksheet(0), daily_sheet.get_worksheet(0)
 
