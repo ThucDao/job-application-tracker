@@ -59,34 +59,40 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
 
 def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
     """Open the existing master sheet named 'All job listings'."""
+    log.info(f"Source spreadsheet ID: {source_spreadsheet_id}")
+    
     # Get parent folder of source spreadsheet
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parent_folder_id = meta.get("parents", [None])[0] or "root"
     log.info(f"Source spreadsheet parent folder ID: {parent_folder_id}")
 
-    # Find "Job listings" folder
+    # Find "Job listings" folder in the same parent folder as source spreadsheet
     folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
+    log.info(f"Searching for 'Job listings' folder with query: {folder_query}")
+    
     folder_search = gc.http_client.request(
         "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(folder_query)}"
     ).json().get("files", [])
 
     if not folder_search:
-        raise RuntimeError(f"Folder 'Job listings' not found in parent folder {parent_folder_id}. Please create it manually.")
+        raise RuntimeError(f"Folder 'Job listings' not found in parent folder {parent_folder_id}. It should be in the same location as the source spreadsheet.")
     
     folder_id = folder_search[0]["id"]
-    log.info(f"Found 'Job listings' folder: {folder_id}")
+    log.info(f"Found 'Job listings' folder with ID: {folder_id}")
 
     # Search for "All job listings" spreadsheet in the Job listings folder
     sheet_query = f"name='All job listings' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
+    log.info(f"Searching for 'All job listings' spreadsheet with query: {sheet_query}")
+    
     sheet_search = gc.http_client.request(
         "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(sheet_query)}"
     ).json().get("files", [])
 
     if not sheet_search:
-        raise RuntimeError(f"Spreadsheet 'All job listings' not found in the 'Job listings' folder. Please create it manually.")
+        raise RuntimeError(f"Spreadsheet 'All job listings' not found in the 'Job listings' folder {folder_id}. Please verify it exists in that folder.")
     
     file_id = sheet_search[0]["id"]
-    log.info(f"Found 'All job listings' spreadsheet: {file_id}")
+    log.info(f"Found 'All job listings' spreadsheet with ID: {file_id}")
     
     master_sheet = gc.open_by_key(file_id)
     return master_sheet.sheet1
