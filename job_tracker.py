@@ -57,6 +57,13 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
             })
     return sources
 
+
+def drive_item_url(item_id: str, item_type: str = "file") -> str:
+    if item_type == "folder":
+        return f"https://drive.google.com/drive/folders/{item_id}"
+    return f"https://docs.google.com/spreadsheets/d/{item_id}"
+
+
 def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
     """Open the existing master sheet named 'All job listings'.
 
@@ -68,7 +75,7 @@ def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
     # Get the first parent folder of source spreadsheet (same folder as Sources sheet)
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parent = meta.get("parents", [None])[0] or "root"
-    log.info(f"Source spreadsheet parent folder ID: {parent}")
+    log.info(f"Source spreadsheet parent folder ID: {parent}, url={drive_item_url(parent, 'folder')}")
 
     # Search for "Job listings" folder inside that parent folder only
     folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent}' in parents"
@@ -82,7 +89,8 @@ def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
         raise RuntimeError(f"Folder 'Job listings' not found in the same folder as the source spreadsheet (parent {parent}). Please create it there.")
 
     folder_id = fs[0]["id"]
-    log.info(f"Found 'Job listings' folder with ID: {folder_id}")
+    folder_name = fs[0].get("name")
+    log.info(f"Found 'Job listings' folder: name={folder_name}, id={folder_id}, url={drive_item_url(folder_id, 'folder')}")
 
     # Search for "All job listings" spreadsheet in the Job listings folder
     sheet_query = f"name='All job listings' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
@@ -96,7 +104,8 @@ def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
         raise RuntimeError(f"Spreadsheet 'All job listings' not found in the 'Job listings' folder {folder_id}. Please verify it exists in that folder.")
 
     file_id = sheet_search[0]["id"]
-    log.info(f"Found 'All job listings' spreadsheet with ID: {file_id}")
+    file_name = sheet_search[0].get("name")
+    log.info(f"Found 'All job listings' spreadsheet: name={file_name}, id={file_id}, url={drive_item_url(file_id)}")
     master_sheet = gc.open_by_key(file_id)
     return master_sheet.sheet1
 
@@ -156,9 +165,9 @@ def main():
     
     gc = get_sheets_client()
     source_sheet = gc.open_by_key(source_id)
-    # Log actual opened sheet id to avoid using a malformed env var
     opened_id = getattr(source_sheet, 'id', None)
-    log.info(f"Opened source spreadsheet id: {opened_id}")
+    opened_title = getattr(source_sheet, 'title', None)
+    log.info(f"Opened source spreadsheet: title={opened_title}, id={opened_id}, url={drive_item_url(opened_id)}")
     sources = read_sources(source_sheet)
 
     # Pass the opened spreadsheet id (may be different from env value)
