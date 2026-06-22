@@ -4,23 +4,6 @@ A powerful Streamlit web app for tracking job applications with **Google Sheets 
 
 ## ✨ Features
 
-### 🎯 Automated Job Tracker with Gemini
-Runs every day at 7 AM ET via **GitHub Actions** — zero servers, zero cost.
-
-| Step | What happens |
-|------|-------------|
-| ☑ | Reads career page URLs from your Google Sheet (`Sources` tab) |
-| ☑ | Scrapes each page for listings posted in the last 2 days |
-| ☑ | Scores every role 1–10 for relevance using Gemini |
-| ☑ | Flags score ≥ 8 as 🔴 HIGH priority |
-| ☑ | Logs everything to the `Results` tab, sorted by score + date |
-| ☑ | Emails you a digest of only the top-priority roles |
-
-### ⚙️ Storage Folder & Files
-Creates a `Job listings` folder in the same workspace location as your source tracking file.
-Stores data across a unified master spreadsheet (`All job listings`) and isolated separate logs (`Jobs yyyy-mm-dd`).
-
-
 ### 🔐 3-Tier Authentication System
 - **Admin (You)**: Full access - see real company names and job titles; view all data
 - **Trusted Viewers (Family)**: Read-only access; see real data but cannot modify
