@@ -89,15 +89,8 @@ def get_or_create_master_sheet(gc: gspread.Client, source_spreadsheet_id: str):
             master_sheet = gc.open_by_key(f["id"])
             break
 
-    # Create Master if missing
     if not master_sheet:
-        spreadsheet = gc.create(master_title, folder_id=folder_id)
-        master_sheet = spreadsheet
-        try:
-            if not master_sheet.sheet1.get_all_values():
-                master_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        except:
-            pass
+        raise RuntimeError("Existing spreadsheet 'All job listings' not found in the target folder. Please create it manually before running the tracker.")
 
     return master_sheet.sheet1
 
