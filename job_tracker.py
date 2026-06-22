@@ -29,9 +29,11 @@ SCOPES = [
 ]
 PRIORITY_THRESHOLD = 8          
 DAYS_LOOKBACK      = 2          
-GEMINI_MODEL       = "gemini-2.5-flash" 
+GEMINI_MODEL       = "gemini-2.5-flash"
+SOURCE_SPREADSHEET_ID = "1gsm9o7dlUHfCHXQcgE_vheGul5SE8rkb4NcMW1KLrUM"
+JOB_LISTINGS_FOLDER_ID = "14-IS1Mbh4ZzPDW4-5yHW1C1BoxGjtFkI"
 
-TAB_SOURCES  = "Sources"        
+TAB_SOURCES  = "Sources"
 RESULTS_HEADERS = ["Date Logged", "Company", "Job Title", "Location", "Date Posted", "Score", "Priority", "URL", "Summary", "Score Reasoning"]
 
 class JobEvaluation(BaseModel):
@@ -64,35 +66,15 @@ def drive_item_url(item_id: str, item_type: str = "file") -> str:
     return f"https://docs.google.com/spreadsheets/d/{item_id}"
 
 
-def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
+def get_job_listings_file(gc: gspread.Client, job_listings_folder_id: str):
     """Open the existing master sheet named 'All job listings'.
 
-    This searches for a folder named 'Job listings' inside the same parent
-    folder as the source spreadsheet (the folder that contains the Sources sheet).
+    This uses the provided Job listings folder ID directly and does not discover
+    the folder via parent metadata.
     """
-    log.info(f"Source spreadsheet ID: {source_spreadsheet_id}")
+    folder_id = job_listings_folder_id
+    log.info(f"Using provided Job listings folder ID: {folder_id}, url={drive_item_url(folder_id, 'folder')}")
 
-    # Get the first parent folder of source spreadsheet (same folder as Sources sheet)
-    meta = gc.get_file_drive_metadata(source_spreadsheet_id)
-    parent = meta.get("parents", [None])[0] or "root"
-    log.info(f"Source spreadsheet parent folder ID: {parent}, url={drive_item_url(parent, 'folder')}")
-
-    # Search for "Job listings" folder inside that parent folder only
-    folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent}' in parents"
-    log.info(f"Searching for 'Job listings' in parent {parent}")
-    fs = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(folder_query)}"
-    ).json().get("files", [])
-    log.info(f"Folder search returned {len(fs)} results for parent {parent}")
-
-    if not fs:
-        raise RuntimeError(f"Folder 'Job listings' not found in the same folder as the source spreadsheet (parent {parent}). Please create it there.")
-
-    folder_id = fs[0]["id"]
-    folder_name = fs[0].get("name")
-    log.info(f"Found 'Job listings' folder: name={folder_name}, id={folder_id}, url={drive_item_url(folder_id, 'folder')}")
-
-    # Search for "All job listings" spreadsheet in the Job listings folder
     sheet_query = f"name='All job listings' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
     log.info(f"Searching for 'All job listings' spreadsheet in folder {folder_id}")
     sheet_search = gc.http_client.request(
@@ -170,8 +152,7 @@ def main():
     log.info(f"Opened source spreadsheet: title={opened_title}, id={opened_id}, url={drive_item_url(opened_id)}")
     sources = read_sources(source_sheet)
 
-    # Pass the opened spreadsheet id (may be different from env value)
-    master_ws = get_job_listings_file(gc, opened_id)
+    master_ws = get_job_listings_file(gc, JOB_LISTINGS_FOLDER_ID)
     gemini_client = genai.Client()
 
     all_new_jobs = []
