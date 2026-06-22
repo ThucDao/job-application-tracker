@@ -58,42 +58,45 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
     return sources
 
 def get_job_listings_file(gc: gspread.Client, source_spreadsheet_id: str):
-    """Open the existing master sheet named 'All job listings'."""
-    log.info(f"Source spreadsheet ID: {source_spreadsheet_id}")
-    
-    # Get parent folder of source spreadsheet
-    meta = gc.get_file_drive_metadata(source_spreadsheet_id)
-    parent_folder_id = meta.get("parents", [None])[0] or "root"
-    log.info(f"Source spreadsheet parent folder ID: {parent_folder_id}")
+    """Open the existing master sheet named 'All job listings'.
 
-    # Find "Job listings" folder in the same parent folder as source spreadsheet
-    folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent_folder_id}' in parents"
-    log.info(f"Searching for 'Job listings' folder with query: {folder_query}")
-    
-    folder_search = gc.http_client.request(
+    This searches for a folder named 'Job listings' inside the same parent
+    folder as the source spreadsheet (the folder that contains the Sources sheet).
+    """
+    log.info(f"Source spreadsheet ID: {source_spreadsheet_id}")
+
+    # Get the first parent folder of source spreadsheet (same folder as Sources sheet)
+    meta = gc.get_file_drive_metadata(source_spreadsheet_id)
+    parent = meta.get("parents", [None])[0] or "root"
+    log.info(f"Source spreadsheet parent folder ID: {parent}")
+
+    # Search for "Job listings" folder inside that parent folder only
+    folder_query = f"name='Job listings' and mimeType='application/vnd.google-apps.folder' and trashed=false and '{parent}' in parents"
+    log.info(f"Searching for 'Job listings' in parent {parent}")
+    fs = gc.http_client.request(
         "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(folder_query)}"
     ).json().get("files", [])
+    log.info(f"Folder search returned {len(fs)} results for parent {parent}")
 
-    if not folder_search:
-        raise RuntimeError(f"Folder 'Job listings' not found in parent folder {parent_folder_id}. It should be in the same location as the source spreadsheet.")
-    
-    folder_id = folder_search[0]["id"]
+    if not fs:
+        raise RuntimeError(f"Folder 'Job listings' not found in the same folder as the source spreadsheet (parent {parent}). Please create it there.")
+
+    folder_id = fs[0]["id"]
     log.info(f"Found 'Job listings' folder with ID: {folder_id}")
 
     # Search for "All job listings" spreadsheet in the Job listings folder
     sheet_query = f"name='All job listings' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
-    log.info(f"Searching for 'All job listings' spreadsheet with query: {sheet_query}")
-    
+    log.info(f"Searching for 'All job listings' spreadsheet in folder {folder_id}")
     sheet_search = gc.http_client.request(
         "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(sheet_query)}"
     ).json().get("files", [])
 
+    log.info(f"Spreadsheet search returned {len(sheet_search)} results in folder {folder_id}")
     if not sheet_search:
         raise RuntimeError(f"Spreadsheet 'All job listings' not found in the 'Job listings' folder {folder_id}. Please verify it exists in that folder.")
-    
+
     file_id = sheet_search[0]["id"]
     log.info(f"Found 'All job listings' spreadsheet with ID: {file_id}")
-    
     master_sheet = gc.open_by_key(file_id)
     return master_sheet.sheet1
 
@@ -153,9 +156,13 @@ def main():
     
     gc = get_sheets_client()
     source_sheet = gc.open_by_key(source_id)
+    # Log actual opened sheet id to avoid using a malformed env var
+    opened_id = getattr(source_sheet, 'id', None)
+    log.info(f"Opened source spreadsheet id: {opened_id}")
     sources = read_sources(source_sheet)
-    
-    master_ws = get_job_listings_file(gc, source_id)
+
+    # Pass the opened spreadsheet id (may be different from env value)
+    master_ws = get_job_listings_file(gc, opened_id)
     gemini_client = genai.Client()
 
     all_new_jobs = []
