@@ -57,44 +57,8 @@ def read_sources(sheet: gspread.Spreadsheet) -> list[dict]:
             })
     return sources
 
-def create_file_with_user_quota(gc: gspread.Client, name: str, folder_id: str, your_gmail: str, template_id: str = None) -> str:
-    """Create daily sheet by copying a template (avoids service account quota issue)."""
-    try:
-        if template_id:
-            # Copy the template - this usually succeeds even with 0-quota SA
-            body = {
-                "name": name,
-                "parents": [folder_id]
-            }
-            res = gc.http_client.request(
-                "post",
-                f"https://www.googleapis.com/drive/v3/files/{template_id}/copy",
-                json=body
-            ).json()
-            file_id = res.get("id")
-            if file_id:
-                log.info(f"✅ Created '{name}' by copying template. ID: {file_id}")
-                
-                # Try transfer ownership
-                if your_gmail:
-                    try:
-                        gc.share(file_id, your_gmail, perm_type='user', role='owner', notify=False)
-                    except:
-                        pass
-                return file_id
-    except Exception as e:
-        log.warning(f"Template copy failed: {e}")
-
-    # Fallback to normal create (will likely fail)
-    log.warning("Template copy failed, trying direct create...")
-    spreadsheet = gc.create(name, folder_id=folder_id)
-    return spreadsheet.id
-
-
-def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadsheet_id: str):
-    """Uses template copying for daily files."""
-    your_gmail = os.environ.get("GMAIL_SENDER")
-    
+def get_or_create_master_sheet(gc: gspread.Client, source_spreadsheet_id: str):
+    """Get or create the single master sheet named 'All job listings'."""
     # Get parent folder
     meta = gc.get_file_drive_metadata(source_spreadsheet_id)
     parent_folder_id = meta.get("parents", [None])[0] or "root"
@@ -111,61 +75,31 @@ def get_or_create_results_folder_and_files(gc: gspread.Client, source_spreadshee
         folder_body = {"name": "Job listings", "mimeType": "application/vnd.google-apps.folder", "parents": [parent_folder_id]}
         res = gc.http_client.request("post", "https://www.googleapis.com/drive/v3/files", json=folder_body).json()
         folder_id = res.get("id")
-        if your_gmail:
-            gc.share_file(folder_id, your_gmail, role='writer')
 
-    # === Template setup ===
-    template_name = "Job Sheet Template"
-    template_id = None
-    file_query = f"name='{template_name}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
-    templates = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(file_query)}"
-    ).json().get("files", [])
-    if templates:
-        template_id = templates[0]["id"]
-
-    # File names
     master_title = "All job listings"
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    daily_title = f"Jobs {today_str}"
-
-    master_sheet = daily_sheet = None
+    master_sheet = None
 
     # Search existing files
     files = gc.http_client.request(
-        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(f'mimeType=\"application/vnd.google-apps.spreadsheet\" and trashed=false and \"{folder_id}\" in parents')}"
+        "get", f"https://www.googleapis.com/drive/v3/files?q={quote_plus(f'mimeType=\"application/vnd.google-apps.spreadsheet\" and trashed=false and "{folder_id}" in parents')}"
     ).json().get("files", [])
 
     for f in files:
         if f["name"] == master_title:
             master_sheet = gc.open_by_key(f["id"])
-        elif f["name"] == daily_title:
-            daily_sheet = gc.open_by_key(f["id"])
+            break
 
     # Create Master if missing
     if not master_sheet:
-        fid = create_file_with_user_quota(gc, master_title, folder_id, your_gmail, template_id)
-        master_sheet = gc.open_by_key(fid)
-        # Ensure headers
+        spreadsheet = gc.create(master_title, folder_id=folder_id)
+        master_sheet = spreadsheet
         try:
             if not master_sheet.sheet1.get_all_values():
                 master_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
         except:
             pass
 
-    # Create Daily sheet by copying template
-    if not daily_sheet:
-        fid = create_file_with_user_quota(gc, daily_title, folder_id, your_gmail, template_id)
-        daily_sheet = gc.open_by_key(fid)
-        # Ensure headers
-        try:
-            if len(daily_sheet.sheet1.get_all_values()) <= 1:
-                daily_sheet.sheet1.append_row(RESULTS_HEADERS, value_input_option="RAW")
-        except:
-            pass
-        log.info(f"✅ Created new daily sheet: {daily_title}")
-
-    return master_sheet.sheet1, daily_sheet.sheet1
+    return master_sheet.sheet1
 
 def already_logged_master(ws: gspread.Worksheet, job_url: str) -> bool:
     try:
@@ -225,7 +159,7 @@ def main():
     source_sheet = gc.open_by_key(source_id)
     sources = read_sources(source_sheet)
     
-    master_ws, daily_ws = get_or_create_results_folder_and_files(gc, source_id)
+    master_ws = get_or_create_master_sheet(gc, source_id)
     gemini_client = genai.Client()
 
     all_new_jobs = []
@@ -249,7 +183,7 @@ def main():
             time.sleep(0.5)
 
     if all_new_jobs:
-        append_to_worksheets([master_ws, daily_ws], all_new_jobs)
+        append_to_worksheets([master_ws], all_new_jobs)
         
     priority_jobs = [j for j in all_new_jobs if j.get("score", 0) >= PRIORITY_THRESHOLD]
     if priority_jobs: 
